@@ -127,6 +127,29 @@ function orgHeaders(): HeadersInit {
   return { "X-Org-Token": ORG_TOKEN };
 }
 
+export interface Corridor {
+  key: string;
+  label: string;
+  bg_geoid: string;
+  why: string;
+  suggested: boolean;
+  neighborhood: string | null;
+  heat_score: number | null;
+  confidence: Confidence | null;
+}
+
+export interface Health {
+  ok: boolean;
+  scored_model_mode: ModelMode | null;
+  scored_at: string | null;
+  n_scored: number;
+  demo: boolean;
+}
+
+export const fetchHealth = () => apiFetch<Health>("/api/health");
+
+export const fetchCorridors = () => apiFetch<Corridor[]>("/api/demo/corridors");
+
 export const fetchBlocks = () => apiFetch<BlocksResponse>("/api/blocks");
 
 export const fetchBlockDetail = (geoid: string) => apiFetch<BlockDetail>(`/api/blocks/${geoid}`);
@@ -134,5 +157,16 @@ export const fetchBlockDetail = (geoid: string) => apiFetch<BlockDetail>(`/api/b
 export const fetchHouseholds = (geoid: string) =>
   apiFetch<HouseholdsResponse>(`/api/blocks/${geoid}/households`, { headers: orgHeaders() });
 
-export const generateBrief = (geoid: string) =>
-  apiFetch<Brief>(`/api/blocks/${geoid}/brief`, { method: "POST", headers: orgHeaders() });
+export interface BriefResponse {
+  bg_geoid: string;
+  neighborhood: string | null;
+  cached: boolean;
+  llm_model: string;
+  brief: Brief;
+}
+
+export const generateBrief = (geoid: string, force = false) =>
+  apiFetch<BriefResponse>(`/api/blocks/${geoid}/brief${force ? "?force=true" : ""}`, {
+    method: "POST",
+    headers: orgHeaders(),
+  });

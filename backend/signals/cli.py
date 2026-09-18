@@ -120,6 +120,28 @@ def rank(threshold: int = typer.Option(70, help="heat_score at or above which a 
 
 
 @app.command()
+def brief(
+    geoid: list[str] = typer.Argument(..., help="block-group GEOID(s) to pre-generate briefs for"),
+    force: bool = typer.Option(False, "--force", help="regenerate even if cached"),
+) -> None:
+    """Pre-generate (and cache under data/briefs/) the outreach brief for the
+    given block groups — run this for the demo corridors before the demo so
+    it works without Wi-Fi (md/TODO.md E.4)."""
+    from signals import brief as brief_mod
+    from signals import forecast as forecast_mod
+
+    con = connect()
+    report = forecast_mod.load_report()
+    for g in geoid:
+        result = brief_mod.get_or_create_brief(con, g, report, force=force)
+        if result is None:
+            typer.echo(f"{g}: unknown block group")
+            continue
+        b, cached, summary = result
+        typer.echo(f"{g} ({summary.neighborhood}): {'cached' if cached else 'generated'} — {b.headline}")
+
+
+@app.command()
 def serve(host: str = "127.0.0.1", port: int = 8000, reload: bool = True) -> None:
     """Run the FastAPI app."""
     uvicorn.run("signals.api:app", host=host, port=port, reload=reload)

@@ -106,7 +106,7 @@ def test_health_reports_scoring_state(client):
 def test_gated_routes_require_token(client):
     assert client.get("/api/blocks/A/households").status_code == 403
     assert client.get("/api/blocks/A/households", headers={"X-Org-Token": "wrong"}).status_code == 403
-    assert client.post("/api/blocks/A/brief", headers={"X-Org-Token": "secret"}).status_code == 501
+
 
 
 def _fake_households(con, geoid, hot_threshold=70, persist=True, today=None):
@@ -144,3 +144,37 @@ def test_households_cold_block_group_returns_hot_false(client, monkeypatch):
     body = client.get("/api/blocks/B/households", headers={"X-Org-Token": "secret"}).json()
     assert body["hot"] is False and body["households"] == []
     assert client.get("/api/blocks/nope/households", headers={"X-Org-Token": "secret"}).status_code == 404
+
+
+def test_brief_route_returns_cached_flag_and_brief(client, monkeypatch):
+    from signals import brief as brief_mod
+
+    fake = brief_mod.Brief(headline="H", what_is_changing=["a"], why_it_matters="b",
+                           protections_to_offer=[], canvassing_plan=["c"], caveats=["d"])
+    summary = brief_mod.BlockSummary(bg_geoid="A", neighborhood="Corktown", heat_score=95, confidence="ok", model_mode="trained",
+                                     backtest_summary="x", top_signals=[], trend_years=[], trend={}, n_owner_occupied=0,
+                                     n_flagged_households=0, reason_counts={}, hot_threshold=70)
+    monkeypatch.setattr(api.brief, "get_or_create_brief", lambda con, g, r, s, force=False: (fake, True, summary) if g == "A" else None)
+    body = client.post("/api/blocks/A/brief", headers={"X-Org-Token": "secret"}).json()
+    assert body["cached"] is True and body["brief"]["headline"] == "H" and body["neighborhood"] == "Corktown"
+    assert client.post("/api/blocks/nope/brief", headers={"X-Org-Token": "secret"}).status_code == 404
+    assert client.post("/api/blocks/A/brief").status_code == 403
+
+
+def test_brief_route_surfaces_missing_key_as_503(client, monkeypatch):
+    def boom(con, g, r, s, force=False):
+        raise RuntimeError("OPENAI_API_KEY is not set")
+    monkeypatch.setattr(api.brief, "get_or_create_brief", boom)
+    resp = client.post("/api/blocks/A/brief", headers={"X-Org-Token": "secret"})
+    assert resp.status_code == 503 and "OPENAI_API_KEY" in resp.json()["detail"]
+
+
+def test_demo_corridors_are_enriched_with_live_scores(client, monkeypatch):
+    monkeypatch.setattr(api.demo, "DEMO_CORRIDORS", [
+        {"key": "hot_1", "label": "Corridor 1", "bg_geoid": "A", "why": "w", "suggested": True},
+        {"key": "control", "label": "Control", "bg_geoid": "ZZZ", "why": "w", "suggested": True},
+    ])
+    body = client.get("/api/demo/corridors").json()
+    assert body[0]["neighborhood"] == "Corktown" and body[0]["heat_score"] == 95 and body[0]["suggested"] is True
+    assert body[1]["heat_score"] is None  # unknown geoid degrades, doesn't crash
+    assert "households" not in json.dumps(body)

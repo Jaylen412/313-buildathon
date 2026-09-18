@@ -24,3 +24,37 @@ Community development organizations, land trusts, and housing counselors have li
 - **Target user:** an outreach lead at a CDO, land trust, or housing counseling agency deciding which blocks and households to reach this month. Residents never pay.
 - **Revenue:** per-organization SaaS for CDOs, CDFIs, and land trusts; city licenses for housing departments. Foundations can fund seats for their grantee cohorts.
 - **Expansion:** every city with parcel, permit, and sales data has the same displacement-timing problem. The pipeline ports to any open data portal.
+
+## Running Signals
+
+Everything runs on one laptop from public data; only the outreach brief calls out (to OpenAI).
+
+**Prerequisites:** [`uv`](https://docs.astral.sh/uv/) (Python 3.12), Node 20+, an OpenAI API key.
+
+```bash
+# 1. secrets (never committed)
+cp backend/.env.example backend/.env         # set OPENAI_API_KEY and SIGNALS_ORG_TOKEN (openssl rand -hex 24)
+echo "VITE_ORG_TOKEN=<same token>" > frontend/.env.local
+
+# 2. data pipeline (~10 min pull from Detroit's Open Data Portal, then seconds)
+cd backend
+uv sync
+uv run signals ingest        # 5 ArcGIS layers -> data/raw/*.parquet + data/signals.duckdb (~295 MB, local)
+uv run signals features      # parcel -> block-group join, block-group x year features, map polygons
+uv run signals train         # forecast + backtest report + heat scores for all 625 block groups
+
+# 3. run it
+uv run signals serve         # API on http://127.0.0.1:8000
+cd ../frontend && npm install && npm run dev   # map on http://localhost:5173
+```
+
+Optional: `uv run signals brief <geoid …>` pre-generates and caches outreach briefs so the demo works
+without Wi-Fi; `uv run signals rank` precomputes the household ranking table for inspection;
+`uv run signals ingest --resume` continues an interrupted pull; `uv run pytest` runs the backend tests.
+
+`SIGNALS_DEMO=1` (default in `.env.example`) anonymizes the household view: names and parcel ids are
+dropped and addresses become hundred-blocks. Household data is only served with the `X-Org-Token`
+header; the public map and block scores never include it.
+
+Design and data notes live in [`md/architecture.md`](md/architecture.md); the manual to-do list is
+[`md/TODO.md`](md/TODO.md).

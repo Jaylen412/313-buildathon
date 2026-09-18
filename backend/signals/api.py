@@ -18,7 +18,7 @@ import duckdb
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from signals import demo, store, vulnerability
+from signals import brief, demo, store, vulnerability
 from signals.config import get_settings
 from signals.forecast import REPORT_FILENAME
 
@@ -80,6 +80,24 @@ def health() -> dict:
         "demo": settings.signals_demo,
         "time": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@app.get("/api/demo/corridors")
+def demo_corridors() -> list[dict]:
+    """Public: the demo fly-to presets from demo.py, enriched with each block
+    group's live neighborhood name and heat score (block-level only)."""
+    con = get_con()
+    try:
+        scores = store.all_scores(con) if store.scores_stamp(con) else {}
+        names = store.block_neighborhoods(con)
+    finally:
+        con.close()
+    out = []
+    for c in demo.DEMO_CORRIDORS:
+        s = scores.get(c["bg_geoid"])
+        out.append({**c, "neighborhood": names.get(c["bg_geoid"]), "heat_score": s["heat_score"] if s else None,
+                    "confidence": s["confidence"] if s else None})
+    return out
 
 
 @app.get("/api/blocks")
@@ -152,7 +170,33 @@ def get_households(geoid: str, x_org_token: str | None = Header(default=None)) -
 
 
 @app.post("/api/blocks/{geoid}/brief")
-def post_brief(geoid: str, x_org_token: str | None = Header(default=None)) -> dict:
-    """Gated: generate (or return cached) outreach brief for a block group."""
+def post_brief(
+    geoid: str, force: bool = False, x_org_token: str | None = Header(default=None)
+) -> dict:
+    """Gated: generate (or return the cached) outreach brief for a block
+    group. The LLM only ever sees the aggregate BlockSummary. `?force=true`
+    regenerates and overwrites the cache."""
     require_org_token(x_org_token)
-    raise HTTPException(status_code=501, detail="outreach briefs arrive in build step 7")
+    settings = get_settings()
+    con = get_con()
+    try:
+        if not store.scores_stamp(con):
+            raise HTTPException(status_code=503, detail="not scored yet: run `uv run signals train`")
+        try:
+            result = brief.get_or_create_brief(con, geoid, load_report(), settings, force=force)
+        except RuntimeError as exc:  # missing key, unparsable model output
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:  # OpenAI errors: surface the message, don't 500
+            raise HTTPException(status_code=502, detail=f"brief generation failed: {exc}") from exc
+    finally:
+        con.close()
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"unknown block group {geoid}")
+    generated, cached, summary = result
+    return {
+        "bg_geoid": geoid,
+        "neighborhood": summary.neighborhood,
+        "cached": cached,
+        "llm_model": settings.openai_model,
+        "brief": generated.model_dump(),
+    }

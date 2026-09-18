@@ -68,13 +68,8 @@ CREATE TABLE IF NOT EXISTS parcel_vulnerability (
     computed_at     TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS briefs (
-    bg_geoid        VARCHAR,
-    model_version   VARCHAR,
-    brief           JSON,
-    created_at      TIMESTAMP,
-    PRIMARY KEY (bg_geoid, model_version)
-);
+-- Briefs are cached as JSON files under data/briefs/ (see brief.py): the API
+-- holds a read-only connection and can't write here.
 """
 
 

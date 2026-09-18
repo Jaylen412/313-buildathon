@@ -43,7 +43,12 @@ export function BlockDrawer({ geoid, onClose }: BlockDrawerProps) {
     <aside className="block-drawer" aria-label="Block group details">
       <button type="button" className="close" onClick={onClose} aria-label="Close">×</button>
 
-      {detail.isLoading && <p className="muted">Loading…</p>}
+      {detail.isLoading && (
+        <div className="skeleton" aria-busy="true" aria-label="Loading block group">
+          <div className="skeleton-line w60" /><div className="skeleton-line w30" />
+          <div className="skeleton-block" /><div className="skeleton-line" /><div className="skeleton-line w80" />
+        </div>
+      )}
       {detail.isError && <p className="error">{(detail.error as Error).message}</p>}
       {detail.data && (
         <>
@@ -86,7 +91,7 @@ export function BlockDrawer({ geoid, onClose }: BlockDrawerProps) {
       )}
 
       <h3>Households to reach first</h3>
-      {households.isLoading && <p className="muted">Loading…</p>}
+      {households.isLoading && <p className="muted">Ranking owner-occupied households…</p>}
       {households.isError && (
         <p className={statusMessage(households.error).pending ? "muted" : "error"}>
           {statusMessage(households.error).text}

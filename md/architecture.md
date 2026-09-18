@@ -146,7 +146,7 @@ Each stage reads only the previous stage's tables. Re-running any stage overwrit
 
 **`parcel_vulnerability`** `(parcel_id PK, bg_geoid, rank, score, reasons JSON, heirship_flag BOOL, computed_at)`.
 
-**`briefs`** `(bg_geoid, model_version, brief JSON, created_at)` — cache.
+**Briefs** are cached as JSON files, `data/briefs/{geoid}.{model_version}.{llm_model}.json`, each holding the `BlockSummary` sent and the `Brief` returned. (Not a DuckDB table: the API's connection is read-only, and a file cache survives re-ingests.)
 
 ## 6. Module contracts
 
@@ -187,17 +187,20 @@ Each stage reads only the previous stage's tables. Re-running any stage overwrit
 - `generate_brief(summary: BlockSummary) -> Brief`
 - `BlockSummary`: `bg_geoid`, `neighborhood`, `heat_score`, `top_signals`, 5-year `trend` arrays, `n_owner_occupied`, `n_flagged_households`, aggregate reason counts (no household rows).
 - `Brief` schema: `headline`, `what_is_changing: list[str]`, `why_it_matters: str`, `protections_to_offer: list[{name, who_qualifies, first_step}]`, `canvassing_plan: list[str]`, `caveats: list[str]`.
-- Provider: OpenAI Responses API, `text.format` = JSON schema from `Brief.model_json_schema()` with `strict: true`; response parsed back into `Brief`. Model name comes from `OPENAI_MODEL` so it can be changed without a code edit.
+- Provider: OpenAI Responses API via `client.responses.parse(model, instructions, input, text_format=Brief)`, which derives the strict JSON schema from the Pydantic model and returns `output_parsed`. Model name comes from `OPENAI_MODEL` so it can be changed without a code edit. `_enforce_protections` drops any name not on the vetted list after parsing.
+- `build_block_summary(con, geoid, report)` assembles the summary from `store.block_detail` + `vulnerability.rank(persist=False)`: only counts of reason types reach the model (`missing_pre`, `unpaid_blight_balance`, `long_tenure`, `no_sale_on_record`, `uncapping_exposure`, `possible_heirs_property`). The partial current year is excluded from the trend.
+- `get_or_create_brief(...) -> (Brief, cached, summary)`; `force=True` regenerates. `signals brief <geoid…>` is the CLI front for pre-caching.
 - System prompt: explain, never compute; only cite numbers present in the summary; protections limited to the vetted list in `config.PROTECTIONS` (see TODO D.2).
 
 ### `api.py`
 | Route | Returns | Gate |
 |---|---|---|
-| `GET /api/health` | ok, model_mode, scored_at | — |
+| `GET /api/health` | ok, configured/scored model mode, scored_at, n_scored, demo flag | — |
+| `GET /api/demo/corridors` | the fly-to presets from `demo.DEMO_CORRIDORS`, each with live `neighborhood`, `heat_score`, `confidence`; `suggested` marks data-driven placeholders the user hasn't confirmed | public |
 | `GET /api/blocks` | GeoJSON FeatureCollection: `bg_geoid`, `neighborhood`, `heat_score`, `confidence`, `top_signals` (with `label`), `model_mode`. Built from the cached `blockgroups.geojson` + `bg_scores`, cached in-process keyed on `scored_at`; 503 until `signals train` has run | public |
 | `GET /api/blocks/{geoid}` | the score row + `neighborhood` (most common parcel neighborhood), `trend` (`years`, per-metric `series`, `partial_year`), `backtest_summary` footnote (backtest numbers, or "weighted index" in fallback mode); 404 for an unknown GEOID | public |
 | `GET /api/blocks/{geoid}/households` | `{hot, hot_threshold, anonymized, heirship_note, households[]}` — computed live via `vulnerability.rank(persist=False)`; `hot=false` with an empty list below the threshold; 404 for an unknown GEOID | `X-Org-Token`; anonymized in demo |
-| `POST /api/blocks/{geoid}/brief` | `Brief` JSON, cached per geoid + model_version | `X-Org-Token` |
+| `POST /api/blocks/{geoid}/brief` (+`?force=true`) | `{bg_geoid, neighborhood, cached, llm_model, brief}`; 503 if the key is missing, 502 with the provider's message if the call fails, 404 for an unknown GEOID | `X-Org-Token` |
 
 The API opens a **read-only DuckDB connection per request** (thread-safe, always sees the latest `signals train`). DuckDB cannot serve reads while another process holds the file for writing, so run pipeline commands with the API stopped.
 
@@ -214,7 +217,7 @@ Core path first, matching the spec cut-line. Each milestone is demoable on its o
 5. **API + map** — choropleth, click → drawer with score and top signals. *Milestone 1.*
 6. **Vulnerability** — ranking, gated + anonymized endpoint, `HouseholdList`. *Milestone 2.*
 7. **Brief** — `brief.py` + `BriefPanel`. *Milestone 3 = full demo.*
-8. **Polish** — corridor fly-to presets from `demo.py`, loading states, README run steps.
+8. **Polish** — corridor fly-to presets from `demo.py` (done: `CorridorBar`), loading states (done: drawer skeleton, offline / not-scored banners), README run steps (done).
 
 Stretch, only after 7: Census ACS join, land value tax simulator.
 
