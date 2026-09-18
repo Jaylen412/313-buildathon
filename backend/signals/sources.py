@@ -8,7 +8,7 @@ resultOffset.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 ARCGIS_ROOT = "https://services2.arcgis.com/qvkbeam7Wirps6zC/ArcGIS/rest/services"
 
@@ -23,6 +23,12 @@ class Layer:
     date_field: str | None = None
     """Field used for --since incremental pulls, if any."""
     return_geometry: bool = False
+    """Full polygon geometry, stored as an Esri-JSON string in a `geometry`
+    column (parsed by geo.py, not ingest.py). Use for BLOCKGROUPS only —
+    378k parcel polygons would be far too slow to page through."""
+    return_centroid: bool = False
+    """Lightweight point centroid only (returnCentroid=true), stored as
+    centroid_lon/centroid_lat float columns. Use for PARCELS."""
     layer_id: int = 0
 
     @property
@@ -33,7 +39,7 @@ class Layer:
 PARCELS = Layer(
     name="parcels",
     service="parcel_file_current",
-    return_geometry=True,  # centroid only, see geo.py
+    return_centroid=True,
     out_fields=[
         "parcel_id", "address", "zip_code", "taxpayer_1", "taxpayer_2",
         "taxpayer_address", "taxpayer_city", "taxpayer_state", "taxpayer_zip_code",
