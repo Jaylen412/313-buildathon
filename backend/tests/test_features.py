@@ -184,7 +184,30 @@ def test_build_features_filters_and_aggregates():
     n_clean = con.execute("SELECT count(*) FROM sales_clean").fetchone()[0]
     assert n_clean == 2
 
+    # permits only exist from 2019: earlier years are NaN (no data), not 0
+    assert df.loc[(df["bg_geoid"] == "A") & (df["year"] < 2019), "permit_count"].isna().all()
+    assert df.loc[(df["bg_geoid"] == "A") & (df["year"] == 2021), "permit_count"] .iloc[0] == 0
+
     # every (bg_geoid, year) combination is present, not just years with data
     years_for_a = set(df.loc[df["bg_geoid"] == "A", "year"])
     assert features.FIRST_SALES_YEAR in years_for_a
     assert 2020 in years_for_a
+
+
+def test_junk_future_dates_do_not_stretch_the_year_grid():
+    con = _base_db()
+    con.execute("INSERT INTO raw_parcels VALUES (?, ?, ?, ?, ?, ?)", ["p1", 1000.0, "MI", 100.0, 1, "RES"])
+    con.execute("INSERT INTO parcel_geo VALUES (?, ?, ?, ?)", ["p1", "A", *BG_CENTERS["A"]])
+    con.execute("INSERT INTO raw_blight VALUES (?, ?)", ["p1", date(8535, 9, 25)])  # real junk row
+    con.execute("INSERT INTO raw_blight VALUES (?, ?)", ["p1", date(1824, 4, 1)])  # real junk row
+    con.execute("INSERT INTO raw_blight VALUES (?, ?)", ["p1", date(2023, 4, 1)])  # legit
+
+    df = features.build_features(con)
+
+    current_year = pd.Timestamp.now().year
+    assert df["year"].max() == current_year
+    assert df["year"].min() == features.FIRST_SALES_YEAR
+    # only block group A has a parcel, so the grid is 1 block group x every year
+    assert len(df) == current_year - features.FIRST_SALES_YEAR + 1
+    assert df.loc[(df["bg_geoid"] == "A") & (df["year"] == 2023), "blight_tickets"].iloc[0] == 1
+    assert df["blight_tickets"].sum() == 1  # junk rows dropped, not binned into some year

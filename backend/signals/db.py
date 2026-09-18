@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS bg_scores (
     bg_geoid            VARCHAR PRIMARY KEY,
     heat_score           INTEGER,
     predicted_growth      DOUBLE,
+    confidence            VARCHAR,   -- 'ok' | 'low' (< 3 sales in the scoring year)
     top_signals            JSON,
     model_version           VARCHAR,
     model_mode              VARCHAR,

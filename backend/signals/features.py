@@ -66,7 +66,7 @@ WHERE bg_geoid IS NOT NULL
 GROUP BY bg_geoid, year(sale_date)
 """
 
-PERMITS_AGG_SQL = """
+PERMITS_AGG_SQL = f"""
 SELECT
     g.bg_geoid,
     year(pr.issued_date) AS year,
@@ -76,20 +76,26 @@ SELECT
              THEN 1 ELSE 0 END) AS new_construction_permits
 FROM raw_permits pr
 JOIN parcel_geo g ON g.parcel_id = pr.parcel_id
-WHERE g.bg_geoid IS NOT NULL AND pr.issued_date IS NOT NULL
+WHERE g.bg_geoid IS NOT NULL
+  AND year(pr.issued_date) BETWEEN {FIRST_SALES_YEAR} AND year(current_date)
 GROUP BY g.bg_geoid, year(pr.issued_date)
 """
 
-BLIGHT_AGG_SQL = """
+BLIGHT_AGG_SQL = f"""
 SELECT
     g.bg_geoid,
     year(b.ticket_issued_date) AS year,
     count(*) AS blight_tickets
 FROM raw_blight b
 JOIN parcel_geo g ON g.parcel_id = b.parcel_id
-WHERE g.bg_geoid IS NOT NULL AND b.ticket_issued_date IS NOT NULL
+WHERE g.bg_geoid IS NOT NULL
+  AND year(b.ticket_issued_date) BETWEEN {FIRST_SALES_YEAR} AND year(current_date)
 GROUP BY g.bg_geoid, year(b.ticket_issued_date)
 """
+
+# Permits and blight carry junk dates too (blight: 56 rows in years 2027-8535,
+# 8 rows before 2000, measured on the real pull) — bound both aggregates to
+# [FIRST_SALES_YEAR, current year] so a typo can't stretch the year grid.
 
 # vacant_share / owner_occ_share are current-snapshot, not per-year (the
 # parcel file only carries "now", not history) — see md/architecture.md §5.
@@ -110,6 +116,12 @@ ALL_BLOCK_GROUPS_SQL = "SELECT DISTINCT bg_geoid FROM parcel_geo WHERE bg_geoid 
 COUNT_FILL_ZERO_COLUMNS = [
     "n_sales", "permit_count", "permit_value", "new_construction_permits", "blight_tickets",
 ]
+
+# The permits layer starts 2019-01-02 (md/architecture.md §1). Before that,
+# "0 permits" would mean "no data", not "no activity" — keep it NaN so the
+# forecast (which handles NaN natively) can't learn a fake pre-2019 lull.
+PERMIT_DATA_START_YEAR = 2019
+PERMIT_COLUMNS = ["permit_count", "permit_value", "new_construction_permits"]
 
 
 def _yoy_log_change(
@@ -170,12 +182,8 @@ def build_features(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     snapshot_agg = con.execute(SNAPSHOT_AGG_SQL).fetchdf()
     all_bg = con.execute(ALL_BLOCK_GROUPS_SQL).fetchdf()["bg_geoid"]
 
-    current_year = pd.Timestamp.now().year
-    year_candidates = [current_year, FIRST_SALES_YEAR]
-    for agg in (sales_agg, permits_agg, blight_agg):
-        if not agg.empty:
-            year_candidates.append(int(agg["year"].max()))
-    years = range(FIRST_SALES_YEAR, max(year_candidates) + 1)
+    # Fixed grid: never let the data extend it (junk future dates exist).
+    years = range(FIRST_SALES_YEAR, pd.Timestamp.now().year + 1)
 
     grid = pd.MultiIndex.from_product([all_bg, years], names=["bg_geoid", "year"]).to_frame(
         index=False
@@ -187,6 +195,7 @@ def build_features(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
 
     for col in COUNT_FILL_ZERO_COLUMNS:
         df[col] = df[col].fillna(0)
+    df.loc[df["year"] < PERMIT_DATA_START_YEAR, PERMIT_COLUMNS] = np.nan
 
     df = df.sort_values(["bg_geoid", "year"]).reset_index(drop=True)
     df["price_yoy"] = _yoy_log_change(df, "median_ppsf", min_n_col="n_sales", min_n=MIN_SALES_FOR_YOY)

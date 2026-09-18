@@ -27,6 +27,8 @@ Gotchas confirmed against the live endpoints:
 - `pct_pre_claimed` (Principal Residence Exemption) is the exemption signal. HOPE / PAYS enrollment is not in the parcel file.
 - **Every layer is Detroit-only at the source, confirmed live** — these are the City of Detroit's own published datasets (parcels from its Assessor, permits from BSEED, blight tickets from its own ticketing system), not a broader region filtered down. The block-group layer's 625 rows confirms this: Wayne County alone has roughly 1,200 block groups and Michigan has about 8,200, so 625 lines up with Detroit specifically. No extra geographic filter is applied in `ingest.py` because none is needed.
 - **Blight tickets (904,905 rows) is the largest layer** — nearly double sales and permits combined, and bigger than originally estimated. It dominates the ingest request count: ~1,870 paginated requests across all five layers. With keyset pagination each page is well under a second, so the whole pull should land around 10–15 minutes.
+- **Real-data shape after the first full run (2026-09-18):** `sales_clean` = 110,097 arm's-length sales; 2011–2012 are thin (~900–1,000 sales/yr city-wide), 2013+ run 4.5k–9.6k/yr, and from 2014 on 470–550 of the 625 block groups have ≥3 sales a year (so `price_yoy` is defined for ~400–530 block groups per year). Permits and `dist_to_hot_corridor_m` exist from 2019/2020 respectively. **2026 is a partial year** (through mid-September) — the forecast must not use it as a target year. Blight has 56 rows dated 2027–8535 and 8 before 2000; `features.py` bounds both permit and blight aggregates to `[2011, current year]`.
+- **What the forecast actually finds hot (trained model, 2025 features):** the ring around the already-hot core — Hubbard Richard (next to Corktown/Mexicantown), McDougall-Hunt and Poletown East (beside Eastern Market/Brush Park), Riverbend (by Jefferson-Chalmers), Dexter-Linwood, Nardin Park. Typical signals: LLC share above the city, a one-year price dip in a thin market, close to a high-permit corridor. 191 of 625 block groups score ≥ 70; 76 are low-confidence (< 3 sales in 2025), 3 of those ≥ 70. The trained model and the *original* momentum-positive index were rank-correlated −0.33; that disagreement is what exposed the sign error.
 - All pulled data lives entirely on the local machine: `backend/data/raw/*.parquet` (one file per layer) and `backend/data/signals.duckdb`. Nothing is uploaded anywhere; only the read-only queries to the public ArcGIS endpoints leave the machine.
 
 ## 2. Decisions
@@ -40,10 +42,11 @@ Gotchas confirmed against the live endpoints:
 | Target | 2-year forward change in log median arm's-length price per sq ft, per block group | Directly "investment pressure"; sales history is deep enough. |
 | Heat score | City-wide percentile rank of the predicted growth, 0–100 | Interpretable and stable across model versions. |
 | Top signals per block | Block's feature z-scores × global permutation importance, top 3 | Deterministic and defensible out loud; no SHAP dependency. |
-| Fallback | Weighted z-score index with the weights table printed in the backtest report | Required by the spec when training data is thin or backtest is poor. Selected by config, labelled in the UI. |
+| Forecast inputs | Momentum, LLC share, permits, blight, corridor distance, sale count. **Not** price levels (`median_ppsf`, `median_price`) and **not** snapshot columns | Levels made the first real model rank the cheapest $8–22/sqft block groups hottest (pure mean reversion); snapshots leak the present into the backtest. See §6. |
+| Fallback | Weighted z-score index with the weights table printed in the backtest report, **sign-checked on real data** | Required by the spec when training data is thin or backtest is poor. The first draft weighted one-year price momentum positively and was anti-predictive on every holdout year; momentum is now discounted. Selected by config, labelled in the UI. |
 | Python toolchain | `uv` + `pyproject.toml`, Python 3.12 | Fast installs, lockfile. |
 | Frontend | Vite + React + TypeScript, `react-leaflet`, TanStack Query, plain CSS | Two screens; no design system needed. |
-| Basemap | CARTO Positron raster tiles | No API key. |
+| Basemap | Esri World Light Gray Base raster tiles | No API key. CARTO Positron was the first choice but now watermarks tiles "API KEY REQUIRED" without a key (seen live 2026-09-18). |
 | LLM call | OpenAI Python SDK, Responses API with Structured Outputs (`strict: true` JSON schema generated from the `Brief` Pydantic model); model from `OPENAI_MODEL` env var | User has existing OpenAI credits. Schema-enforced output; model is swappable without code changes. |
 | Household gating | `X-Org-Token` header must equal `SIGNALS_ORG_TOKEN`; `SIGNALS_DEMO=1` anonymizes | Spec's non-negotiable: only block-level is public. The token is a single shared secret standing in for "organization accounts"; real login is out of scope for the hackathon. |
 
@@ -67,6 +70,7 @@ Gotchas confirmed against the live endpoints:
 │   │   ├── vulnerability.py      # owner-occupied parcel ranking on hot block groups
 │   │   ├── brief.py              # LLM outreach brief (OpenAI), schema-constrained
 │   │   ├── demo.py               # demo corridor GEOIDs + anonymization helpers
+│   │   ├── store.py              # read-side queries for the API (map payload, detail, trend)
 │   │   ├── api.py                # FastAPI app
 │   │   └── cli.py                # `signals ingest|features|train|score|serve`
 │   ├── tests/
@@ -74,11 +78,13 @@ Gotchas confirmed against the live endpoints:
 ├── frontend/
 │   ├── package.json, vite.config.ts, index.html
 │   └── src/
-│       ├── api.ts                        # typed fetchers
+│       ├── api.ts                        # typed fetchers + ApiError (surfaces FastAPI `detail`)
+│       ├── heat.ts                       # single-hue sequential ramp for the heat score
 │       ├── App.tsx                       # map + drawer layout
 │       └── components/
 │           ├── HeatMap.tsx               # react-leaflet choropleth of block groups
 │           ├── BlockDrawer.tsx           # score, top signals, trend, households
+│           ├── Trend.tsx                 # single-series sparklines (small multiples)
 │           ├── HouseholdList.tsx         # ranked rows, reason chips, heirship as "follow-up flag"
 │           └── BriefPanel.tsx            # "Generate brief" → rendered sections
 ├── md/
@@ -136,7 +142,7 @@ Each stage reads only the previous stage's tables. Re-running any stage overwrit
 | `owner_occ_share` | parcels with `pct_pre_claimed > 0` (snapshot) |
 | `dist_to_hot_corridor_m` | distance (meters, UTM zone 17N — exact for Detroit) from block-group centroid to nearest of the top-25 block groups by `permit_value` in the prior year; NaN before there's a prior year with permit data (i.e. before 2020) |
 
-**`bg_scores`** `(bg_geoid PK, heat_score INT, predicted_growth DOUBLE, top_signals JSON, model_version, model_mode, scored_at)`.
+**`bg_scores`** `(bg_geoid PK, heat_score INT, predicted_growth DOUBLE, confidence 'ok'|'low', top_signals JSON, model_version, model_mode, scored_at TIMESTAMPTZ)`.
 
 **`parcel_vulnerability`** `(parcel_id PK, bg_geoid, rank, score, reasons JSON, heirship_flag BOOL, computed_at)`.
 
@@ -159,8 +165,11 @@ Each stage reads only the previous stage's tables. Re-running any stage overwrit
 ### `forecast.py`
 - `train(features) -> tuple[Model, dict]` — rows: `(bg_geoid, year T)` with target `median_ppsf[T+2] − median_ppsf[T]` in log space, T ≤ current − 2. Hold out the latest available window as backtest. Report MAE, R², Spearman ρ, feature importances, training row count to `data/models/backtest_report.json`.
 - `score(model, features) -> pd.DataFrame` — predicts on latest year, percentile-ranks to `heat_score`, computes `top_signals` (top 3 `[{feature, value, z, direction}]`).
-- `fallback_index(features) -> pd.DataFrame` — published weights: `permit_count_yoy 0.25, price_yoy 0.25, llc_share 0.2, permit_value 0.15, dist_to_hot_corridor_m −0.15`; same output shape, `model_mode='fallback'`.
+- `fallback_index(features) -> pd.DataFrame` — published weights: `llc_share 0.35, price_yoy −0.25, permit_count_yoy 0.15, permit_value 0.10, dist_to_hot_corridor_m −0.15`; same output shape, `model_mode='fallback'`. The report carries this index's own Spearman on each of the last five holdout years next to the model's.
+- Training rows require ≥ 5 sales at both ends of the window and a starting `median_ppsf ≥ $20` (log ratios of near-zero land sales are noise). Every score carries `confidence` = `low` when the block group had < 3 sales in the scoring year.
 - `MODEL_MODE=auto` picks fallback when training rows < 500 or backtest Spearman ρ < 0.2.
+- `SIGNAL_LABELS` maps each feature to plain language for the drawer and the brief.
+- **Real-data backtest (2026-09-18, holdout 2023, 2,626 training rows):** MAE 0.215 vs 0.229 predict-the-mean, R² 0.10, Spearman 0.39 (0.31 on a 2022 holdout). Top importances: `price_yoy`, `llc_share`, `dist_to_hot_corridor_m`. The skill is real but modest, and the single strongest effect is *reversal*: one-year price momentum alone scores Spearman −0.35 to −0.40 against realized two-year growth. Without `price_yoy` the model has no skill (≈0.0); with a smoother two-year momentum it keeps most of it (0.24–0.29). The chosen fallback index scores +0.13 to +0.32 across 2019–2023; a two-term `llc_share + reversal` index scores +0.24 to +0.36 but drops the permit and corridor signals the product names. Index candidates were compared on the same five years, so treat the weight choice as backtested, not tuned.
 
 ### `vulnerability.py`
 - `rank(con, bg_geoid, hot_threshold=70) -> list[Household]` — only for block groups with `heat_score ≥ hot_threshold`.
@@ -172,6 +181,7 @@ Each stage reads only the previous stage's tables. Re-running any stage overwrit
   - Uncapping exposure: `(amt_assessed_value − amt_taxable_value) / amt_assessed_value` ×2.0 — "Taxable value far below assessed; a transfer would spike the bill"
   - Heirship flag (1.0, boolean) — "Possible heirs' property: follow up, not a determination". Triggers on `taxpayer_1` containing `ESTATE OF|HEIRS|ET AL|DECEASED|C/O`, or taxpayer surname ≠ last grantee surname with last sale > 15 years ago.
 - Output is anonymized by `demo.py` when `SIGNALS_DEMO=1`: names dropped, address → hundred-block, no `parcel_id`.
+- **As built against the real parcel file (2026-09-18):** residential = `property_class IN ('401','407')`; owner-occupied = `pct_pre_claimed > 0` OR (address key = house number + first street token matches, since mailing addresses differ mostly by suffix) AND the taxpayer isn't an entity (LLC/INC/TRUST/LAND BANK/…; some LLCs list the property as their own mailing address). Tenure = years since the last arm's-length sale since 2011, else the parcel file's own `sale_date` (text, cast on read; covers 202k of 213k residential parcels), else unknown → cap points + "No sale on record". The taxable/assessed gap has a median of 0.61 among PRE homes (Michigan's cap), so its reason line only appears at ≥ 0.5. Blight balance is the delinquency proxy (89,880 parcels, $135M outstanding). `Household` also carries `owner`, `tenure_years`, `has_pre`, `unpaid_blight_balance`, `uncapping_gap`. Real output: 86 households on the top block group (40 missing PRE, 23 with a blight balance, 1 heirship flag), 167 on Hubbard Richard.
 
 ### `brief.py`
 - `generate_brief(summary: BlockSummary) -> Brief`
@@ -184,10 +194,12 @@ Each stage reads only the previous stage's tables. Re-running any stage overwrit
 | Route | Returns | Gate |
 |---|---|---|
 | `GET /api/health` | ok, model_mode, scored_at | — |
-| `GET /api/blocks` | GeoJSON FeatureCollection: `bg_geoid`, `heat_score`, `top_signals`, `neighborhood` | public |
-| `GET /api/blocks/{geoid}` | score, signals, trend arrays, backtest summary | public |
-| `GET /api/blocks/{geoid}/households` | ranked households with reasons | `X-Org-Token`; anonymized in demo |
+| `GET /api/blocks` | GeoJSON FeatureCollection: `bg_geoid`, `neighborhood`, `heat_score`, `confidence`, `top_signals` (with `label`), `model_mode`. Built from the cached `blockgroups.geojson` + `bg_scores`, cached in-process keyed on `scored_at`; 503 until `signals train` has run | public |
+| `GET /api/blocks/{geoid}` | the score row + `neighborhood` (most common parcel neighborhood), `trend` (`years`, per-metric `series`, `partial_year`), `backtest_summary` footnote (backtest numbers, or "weighted index" in fallback mode); 404 for an unknown GEOID | public |
+| `GET /api/blocks/{geoid}/households` | `{hot, hot_threshold, anonymized, heirship_note, households[]}` — computed live via `vulnerability.rank(persist=False)`; `hot=false` with an empty list below the threshold; 404 for an unknown GEOID | `X-Org-Token`; anonymized in demo |
 | `POST /api/blocks/{geoid}/brief` | `Brief` JSON, cached per geoid + model_version | `X-Org-Token` |
+
+The API opens a **read-only DuckDB connection per request** (thread-safe, always sees the latest `signals train`). DuckDB cannot serve reads while another process holds the file for writing, so run pipeline commands with the API stopped.
 
 **Org token.** `SIGNALS_ORG_TOKEN` is one long random string in `backend/.env`. The frontend reads the same value from `VITE_ORG_TOKEN` in `frontend/.env.local` and sends it as the `X-Org-Token` header on the two gated routes. A matching header means "CDO staff"; anything else gets block-level data only. There is no login UI in v1.
 
