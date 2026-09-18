@@ -1,0 +1,39 @@
+[project]
+name = "signals"
+version = "0.1.0"
+description = "Add your description here"
+authors = [
+    { name = "Jaylen Thomas", email = "93702389+Jaylen412@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "duckdb>=1.5.5",
+    "fastapi>=0.141.1",
+    "geopandas>=1.1.4",
+    "httpx>=0.28.1",
+    "openai>=3.15.0",
+    "pandas>=3.0.6",
+    "pyarrow>=25.0.1",
+    "pydantic-settings>=2.15.0",
+    "pytz>=2026.3.post1",
+    "scikit-learn>=1.9.1",
+    "shapely>=2.1.2",
+    "typer>=0.27.2",
+    "uvicorn[standard]>=0.53.0",
+]
+
+[project.scripts]
+signals = "signals:main"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[build-system]
+requires = ["uv_build>=0.12.16,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+]
