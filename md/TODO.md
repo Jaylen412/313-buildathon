@@ -2,7 +2,7 @@
 
 Things only you can do. Everything else is code and is tracked in `architecture.md` §7.
 
-**Status:** scaffolding is done (backend + frontend both boot, tests pass). Currently building build-order step 2, `ingest.py` (the ArcGIS paginator) — that's my work, not yours. The real blockers on your side right now are section D.1 (demo corridors) and section E (deadline, ownership).
+**Status:** scaffolding is done, and `ingest.py` (build-order step 2) is implemented and verified live against all five ArcGIS layers. Section C.1 below is now your real blocker — run it whenever you're ready, it's long. The other open red items are D.1 (demo corridors) and section E (deadline, ownership).
 
 Urgency: 🔴 do now · 🟡 before the first end-to-end run · 🟢 before the demo
 
@@ -26,11 +26,11 @@ Urgency: 🔴 do now · 🟡 before the first end-to-end run · 🟢 before the 
 
 ## C. Data pulls you must run
 
-- [ ] 🔴 **Run the full ingest** as soon as `ingest.py` is implemented (I'll flag it here when it's ready):
+- [ ] 🔴 **Run the full ingest now** — `ingest.py` is done and verified against live data:
   ```
   cd backend && uv run signals ingest
   ```
-  Roughly 1,000 paginated requests (378k parcels, 537k sales, 47k permits, blight, block groups). Expect 15–30 minutes. Leaves `backend/data/raw/*.parquet` and `backend/data/signals.duckdb`. Start it and keep doing other things; nothing downstream can be tested until it finishes.
+  Roughly 1,000 paginated requests (378k parcels, 537k sales, 47k permits, blight, block groups). Expect 15–30 minutes. Leaves `backend/data/raw/*.parquet` and `backend/data/signals.duckdb`. Start it and keep doing other things (e.g. section D.1 or E below); nothing downstream can be tested until it finishes. First run will also download DuckDB's spatial extension (needs internet once).
 - [ ] 🟡 **Spot-check 3 parcels you personally know** (your block, a relative's house) in `raw_parcels`:
   - Does `pct_pre_claimed` match whether they actually have the exemption?
   - Does `taxpayer_address` equal `address` for owner-occupants?
@@ -83,3 +83,4 @@ Urgency: 🔴 do now · 🟡 before the first end-to-end run · 🟢 before the 
 - ✅ `md/` is tracked in git.
 - ✅ LLM provider: OpenAI (existing credits). `brief.py` uses the OpenAI SDK with structured outputs.
 - ✅ Scaffolding (build-order step 1): backend (`uv`, FastAPI, DuckDB) and frontend (Vite + React + TypeScript, Leaflet, TanStack Query) both boot; `/api/health` live; gating verified against the real token (no token → 403, correct token → 501 not-yet-implemented); 5 backend tests pass; frontend type-checks and builds.
+- ✅ Ingest (build-order step 2): `ingest.py`'s ArcGIS paginator is implemented — pagination, retry/backoff, incremental `--since` refresh, and `parcel_id` normalization all covered by 13 unit tests against a mocked transport, plus a live smoke test against all five real endpoints (sales, permits, blight, parcels with centroids, block groups with polygons). Nobody has run the full pull yet — that's C.1 above.
