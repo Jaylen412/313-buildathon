@@ -2,7 +2,7 @@
 
 Things only you can do. Everything else is code and is tracked in `architecture.md` §7.
 
-**Status:** scaffolding is done, and `ingest.py` (build-order step 2) is implemented and verified live against all five ArcGIS layers. Section C.1 below is now your real blocker — run it whenever you're ready, it's long. The other open red items are D.1 (demo corridors) and section E (deadline, ownership).
+**Status:** scaffolding, `ingest.py` (step 2), and `geo.py` + `features.py` (step 3) are all implemented — the last two are built and unit-tested against synthetic data while your ingest runs, but not yet verified against the real pull (that needs C.1 to finish first). Section C.1 is your real blocker; the other open red items are D.1 (demo corridors) and section E (deadline, ownership).
 
 Urgency: 🔴 do now · 🟡 before the first end-to-end run · 🟢 before the demo
 
@@ -30,7 +30,7 @@ Urgency: 🔴 do now · 🟡 before the first end-to-end run · 🟢 before the 
   ```
   cd backend && uv run signals ingest
   ```
-  Roughly 1,000 paginated requests (378k parcels, 537k sales, 47k permits, blight, block groups). Expect 15–30 minutes. Leaves `backend/data/raw/*.parquet` and `backend/data/signals.duckdb`. Start it and keep doing other things (e.g. section D.1 or E below); nothing downstream can be tested until it finishes. First run will also download DuckDB's spatial extension (needs internet once).
+  Roughly 1,870 paginated requests (378k parcels, 538k sales, 47k permits, **905k blight tickets** — the biggest layer —, 625 block groups). With keyset pagination (fixed after the first run died on the sales layer) expect roughly 10–15 minutes. If a run dies, rerun with `--resume` to skip layers already saved under `backend/data/raw/`. Leaves `backend/data/raw/*.parquet` and `backend/data/signals.duckdb`, both entirely on your local disk (no cloud storage involved). Start it and keep doing other things (e.g. section D.1 or E below); nothing downstream can be tested until it finishes. First run will also download DuckDB's spatial extension (needs internet once).
 - [ ] 🟡 **Spot-check 3 parcels you personally know** (your block, a relative's house) in `raw_parcels`:
   - Does `pct_pre_claimed` match whether they actually have the exemption?
   - Does `taxpayer_address` equal `address` for owner-occupants?
@@ -84,3 +84,5 @@ Urgency: 🔴 do now · 🟡 before the first end-to-end run · 🟢 before the 
 - ✅ LLM provider: OpenAI (existing credits). `brief.py` uses the OpenAI SDK with structured outputs.
 - ✅ Scaffolding (build-order step 1): backend (`uv`, FastAPI, DuckDB) and frontend (Vite + React + TypeScript, Leaflet, TanStack Query) both boot; `/api/health` live; gating verified against the real token (no token → 403, correct token → 501 not-yet-implemented); 5 backend tests pass; frontend type-checks and builds.
 - ✅ Ingest (build-order step 2): `ingest.py`'s ArcGIS paginator is implemented — pagination, retry/backoff, incremental `--since` refresh, and `parcel_id` normalization all covered by 13 unit tests against a mocked transport, plus a live smoke test against all five real endpoints (sales, permits, blight, parcels with centroids, block groups with polygons). Nobody has run the full pull yet — that's C.1 above.
+- ✅ Ingest's arm's-length sale filter is now grounded in real data, not a guess: `term_of_sale` is a controlled vocabulary and exactly two of ~15 categories are genuinely arm's-length (`03-ARM'S LENGTH`, `19-MULTI PARCEL ARM'S LENGTH`), confirmed via a live stats query against all 537,595 sales rows. See `architecture.md` §1.
+- ✅ Geo + features (build-order step 3): `geo.py` (Esri-JSON polygon parsing, parcel→block-group spatial join, simplified GeoJSON export) and `features.py` (arm's-length sales filter, block-group×year aggregation, year-over-year deltas, corridor-distance geometry in UTM 17N) are both implemented, with 11 unit tests against synthetic block-group geometry. `signals features` will run once C.1 finishes; not yet run against real data.

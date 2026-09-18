@@ -2,15 +2,19 @@
 
 Contract (md/architecture.md §6):
     pull_layer(layer, since=None) -> Path      # writes data/raw/{layer.name}.parquet
-    load_all(con, since=None)                  # parquet -> raw_* tables, normalizes parcel_id
+    load_all(con, since=None, resume=False)    # parquet -> raw_* tables, normalizes parcel_id
 
-Every layer caps at 1,000 records/response (md/architecture.md §1), so this
-pages with resultOffset until a short page signals the end. PARCELS pulls
-centroids only (returnCentroid=true) rather than full polygons — 378k
-polygons would make the pull far too slow, and geo.py only needs a point per
-parcel. BLOCKGROUPS pulls full polygons (a few hundred rows, needed for the
-map) and stores them as raw Esri-JSON strings; geo.py does the actual
-geometry parsing.
+Pagination is *keyset* on the layer's object-id field (`WHERE oid > last
+ORDER BY oid`), not resultOffset. Measured live on the sales view
+(2026-09-18): resultOffset takes 0.5 s at offset 0, 19 s at offset 300k,
+and intermittently times out server-side with a generic 400 "Invalid query
+parameters"; keyset returns the same 1,000 rows in 0.1 s at any depth.
+
+PARCELS pulls centroids only (returnCentroid=true) rather than full
+polygons — 378k polygons would make the pull far too slow, and geo.py only
+needs a point per parcel. BLOCKGROUPS pulls full polygons (625 rows, needed
+for the map) and stores them as raw Esri-JSON strings; geo.py does the
+actual geometry parsing.
 """
 from __future__ import annotations
 
@@ -28,19 +32,28 @@ from signals.sources import ALL_LAYERS, Layer
 PAGE_SIZE = 1000
 MAX_RETRIES = 5
 TIMEOUT_S = 60.0
-USER_AGENT = "signals-ingest/0.1 (313 Buildathon; +https://github.com/)"
+USER_AGENT = "signals-ingest/0.1 (313 Buildathon)"
 
 
-def _build_params(layer: Layer, since: date | None, offset: int) -> dict:
-    where = "1=1"
+def _base_where(layer: Layer, since: date | None) -> str:
     if since is not None and layer.date_field is not None:
-        where = f"{layer.date_field} >= DATE '{since.isoformat()}'"
+        return f"{layer.date_field} >= DATE '{since.isoformat()}'"
+    return "1=1"
+
+
+def _build_params(layer: Layer, since: date | None, oid_field: str, last_oid: int | None) -> dict:
+    where = _base_where(layer, since)
+    if last_oid is not None:
+        where = f"({where}) AND {oid_field} > {last_oid}"
+    out_fields = list(layer.out_fields)
+    if oid_field not in out_fields:
+        out_fields.append(oid_field)
     params: dict = {
         "f": "json",
         "where": where,
-        "outFields": ",".join(layer.out_fields),
+        "outFields": ",".join(out_fields),
         "outSR": "4326",
-        "resultOffset": offset,
+        "orderByFields": f"{oid_field} ASC",
         "resultRecordCount": PAGE_SIZE,
         "returnGeometry": "true" if layer.return_geometry else "false",
     }
@@ -49,13 +62,13 @@ def _build_params(layer: Layer, since: date | None, offset: int) -> dict:
     return params
 
 
-def _fetch_page(client: httpx.Client, layer: Layer, params: dict) -> dict:
-    """GET one page with retry + exponential backoff. Raises on repeated
-    failure or an ArcGIS-reported error payload."""
+def _get_json(client: httpx.Client, layer: Layer, url: str, params: dict) -> dict:
+    """GET with retry + exponential backoff. Raises on repeated failure or an
+    ArcGIS-reported error payload (which comes back as HTTP 200)."""
     last_exc: Exception | None = None
     for attempt in range(MAX_RETRIES):
         try:
-            resp = client.get(layer.query_url, params=params, timeout=TIMEOUT_S)
+            resp = client.get(url, params=params, timeout=TIMEOUT_S)
             resp.raise_for_status()
             data = resp.json()
         except (httpx.HTTPError, ValueError) as exc:
@@ -70,6 +83,20 @@ def _fetch_page(client: httpx.Client, layer: Layer, params: dict) -> dict:
               f"sleeping {sleep_s}s")
         time.sleep(sleep_s)
     raise RuntimeError(f"failed to fetch {layer.name} after {MAX_RETRIES} attempts") from last_exc
+
+
+def _fetch_page(client: httpx.Client, layer: Layer, params: dict) -> dict:
+    return _get_json(client, layer, layer.query_url, params)
+
+
+def _object_id_field(client: httpx.Client, layer: Layer) -> str:
+    """Read the layer's object-id field name from its metadata. It differs
+    across Detroit's layers (`ObjectId` vs `OBJECTID`), so never hardcode."""
+    meta = _get_json(client, layer, layer.layer_url, {"f": "json"})
+    field = meta.get("objectIdField")
+    if not field:
+        raise RuntimeError(f"{layer.name}: layer metadata has no objectIdField")
+    return field
 
 
 def _feature_to_row(feature: dict, layer: Layer) -> dict:
@@ -104,7 +131,7 @@ def pull_layer(
     settings: Settings | None = None,
     client: httpx.Client | None = None,
 ) -> Path:
-    """Page through layer.query_url and write the combined result to
+    """Keyset-page through layer.query_url and write the combined result to
     data/raw/{layer.name}.parquet. Idempotent: overwrites the existing file.
     Returns the parquet path.
 
@@ -118,18 +145,22 @@ def pull_layer(
         client = httpx.Client(headers={"User-Agent": USER_AGENT}, follow_redirects=True)
 
     try:
+        oid_field = _object_id_field(client, layer)
         rows: list[dict] = []
-        offset = 0
+        last_oid: int | None = None
+        page = 0
         while True:
-            params = _build_params(layer, since, offset)
+            params = _build_params(layer, since, oid_field, last_oid)
             data = _fetch_page(client, layer, params)
             features = data.get("features", [])
             rows.extend(_feature_to_row(f, layer) for f in features)
-            print(f"  [{layer.name}] offset={offset} +{len(features)} rows "
-                  f"(total {len(rows)})")
+            if features:
+                last_oid = max(f["attributes"][oid_field] for f in features)
+            page += 1
+            print(f"  [{layer.name}] page {page} +{len(features)} rows (total {len(rows)}, "
+                  f"{oid_field} <= {last_oid})")
             if len(features) < PAGE_SIZE:
                 break
-            offset += PAGE_SIZE
     finally:
         if owns_client:
             client.close()
@@ -141,6 +172,8 @@ def pull_layer(
         # Keep a stable schema even with zero rows (e.g. an incremental pull
         # that finds nothing new) so downstream SQL can still find parcel_id.
         columns = list(layer.out_fields)
+        if oid_field not in columns:
+            columns.append(oid_field)
         if layer.return_centroid:
             columns += ["centroid_lon", "centroid_lat"]
         if layer.return_geometry:
@@ -183,14 +216,27 @@ def _load_layer(con, layer: Layer, parquet_path: Path, since: date | None) -> No
     print(f"[{layer.name}] {table}: {count} rows")
 
 
-def load_all(con, since: date | None = None, settings: Settings | None = None) -> None:
+def load_all(
+    con,
+    since: date | None = None,
+    settings: Settings | None = None,
+    resume: bool = False,
+) -> None:
     """Pull every layer in sources.ALL_LAYERS and load each into a raw_{name}
-    table, stripping the trailing '.' from parcel_id (see §1 gotchas)."""
+    table, stripping the trailing '.' from parcel_id (see §1 gotchas).
+
+    resume=True skips the network pull for any layer whose parquet already
+    exists (it is still (re)loaded into DuckDB), so a crashed run picks up
+    where it left off instead of re-pulling finished layers."""
     settings = settings or get_settings()
     started = datetime.now(timezone.utc)
     for layer in ALL_LAYERS:
         print(f"=== {layer.name} ===")
-        path = pull_layer(layer, since=since, settings=settings)
+        path = settings.raw_dir / f"{layer.name}.parquet"
+        if resume and path.exists():
+            print(f"[{layer.name}] --resume: {path} exists, skipping pull")
+        else:
+            path = pull_layer(layer, since=since, settings=settings)
         _load_layer(con, layer, path, since)
     elapsed = (datetime.now(timezone.utc) - started).total_seconds()
     print(f"ingest done in {elapsed:.0f}s")

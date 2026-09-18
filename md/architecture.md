@@ -4,26 +4,30 @@ Source of truth for module boundaries, data model, and build order. `signal-deta
 
 ## 1. Verified data sources (checked 2026-09-18)
 
-All layers live under `https://services2.arcgis.com/qvkbeam7Wirps6zC/ArcGIS/rest/services/`. Every layer caps at 1,000 records per response and supports `resultOffset` pagination.
+All layers live under `https://services2.arcgis.com/qvkbeam7Wirps6zC/ArcGIS/rest/services/`. Every layer caps at 1,000 records per response. Paginate by keyset on the object-id field, not `resultOffset` (see gotchas below).
 
 | Layer | Path | Rows | Geometry | Fields we use |
 |---|---|---|---|---|
 | Parcels (current) | `parcel_file_current/FeatureServer/0` | 377,940 | polygon | `parcel_id`, `address`, `taxpayer_1`, `taxpayer_2`, `taxpayer_address`, `taxpayer_city`, `taxpayer_state`, `taxpayer_zip_code`, `property_class`, `property_class_description`, `tax_status`, `amt_assessed_value`, `amt_assessed_value_previous`, `amt_taxable_value`, `amt_taxable_value_previous`, `amt_land_value`, `pct_pre_claimed`, `nez_district`, `is_improved`, `sale_date`, `amt_sale_price`, `total_square_footage`, `total_floor_area`, `year_built`, `census_tract_geoid_2020`, `neighborhood`, `council_district`, `zip_code` |
-| Property sales (history) | `assessor_property_sales_view/FeatureServer/0` | ~537,600 | point | `sale_id`, `parcel_id`, `sale_date` (2011 → present), `amt_sale_price`, `grantor`, `grantee`, `term_of_sale`, `sale_verification`, `sale_instrument`, `is_multi_parcel_sale`, `pct_property_transferred`, `property_class_code`, `longitude`, `latitude` |
+| Property sales (history) | `assessor_property_sales_view/FeatureServer/0` | 537,595 | point | `sale_id`, `parcel_id`, `sale_date` (2011 → present), `amt_sale_price`, `grantor`, `grantee`, `term_of_sale`, `sale_verification`, `sale_instrument`, `is_multi_parcel_sale`, `pct_property_transferred`, `property_class_code`, `longitude`, `latitude` |
 | Building permits | `bseed_building_permits/FeatureServer/0` | 47,154 | point | `record_id`, `parcel_id`, `issued_date` (2019 → present), `permit_type`, `work_description`, `construction_type`, `proposed_use_type`, `num_units`, `amt_estimated_contractor_cost`, `is_vacant`, `longitude`, `latitude` |
-| Blight tickets | `blight_tickets/FeatureServer/0` | not yet counted | point | `ticket_id`, `parcel_id`, `ticket_issued_date`, `ordinance_description`, `disposition`, `payment_status`, `collection_status`, `amt_fine`, `amt_balance_due`, `property_owner_name`, `property_owner_state`, `longitude`, `latitude` |
-| Census block groups 2020 | `CensusBlockgroup2020/FeatureServer/0` | ~1,000 | polygon | `GEOID` (12-digit), `TRACTCE`, `BLKGRPCE`, `ALAND` |
+| Blight tickets | `blight_tickets/FeatureServer/0` | 904,905 | point | `ticket_id`, `parcel_id`, `ticket_issued_date`, `ordinance_description`, `disposition`, `payment_status`, `collection_status`, `amt_fine`, `amt_balance_due`, `property_owner_name`, `property_owner_state`, `longitude`, `latitude` |
+| Census block groups 2020 | `CensusBlockgroup2020/FeatureServer/0` | 625 | polygon | `GEOID` (12-digit), `TRACTCE`, `BLKGRPCE`, `ALAND` |
 | Census blocks 2020 | `CensusBlocks2020/FeatureServer/0` | — | polygon | not used in v1 |
 
 Gotchas confirmed against the live endpoints:
 
 - **Do not use** `services6.arcgis.com/ONZht79c8QWuX759/.../Building_Permits`. Search surfaces it first, but it is a quarterly aggregate table with no parcel or date columns.
 - `parcel_id` carries a trailing period in every layer (`21013863.`). Strip it once in ingest.
-- Sales history has junk: `$0` transfers and typo dates (years 2202, 2206, 2925 exist). Filter on `amt_sale_price > 1000`, `sale_date` between 2011-01-01 and today, and `is_multi_parcel_sale = 'No'`. Use `sale_verification` / `term_of_sale` to keep arm's-length sales only once we see their value sets.
+- **`resultOffset` pagination is a trap on these layers.** Measured live: the sales view answers offset 0 in 0.5 s, offset 300k in 19 s (42 s with `orderByFields`), and intermittently times out server-side with a generic `400 Invalid query parameters` — which is exactly how the first full ingest run died. Keyset pagination (`WHERE oid > last_seen ORDER BY oid ASC`, `resultRecordCount=1000`) returns the same page in 0.1–0.7 s at any depth on every layer. The object-id field name is not uniform (`ObjectId` on parcels/sales/permits, `OBJECTID` on blight/block groups); `ingest.py` reads `objectIdField` from each layer's metadata rather than hardcoding it.
+- Sales history has junk: `$0`/low-dollar transfers and typo dates (years 2202, 2206, 2925 exist). Filter on `amt_sale_price > 1000` and `sale_date` between 2011-01-01 and today. `term_of_sale` is a controlled vocabulary (queried live 2026-09-18); exactly two of ~15 categories are genuinely arm's-length — `03-ARM'S LENGTH` (100,712 of 537,595 rows) and `19-MULTI PARCEL ARM'S LENGTH` (12,116 rows). Everything else (`13-GOVERNMENT`, `10-FORECLOSURE`, `09-FAMILY/RELATED ENTITY`, `21-NOT USED/OTHER`, etc.) is excluded. Match on the `ARM'S LENGTH` substring rather than hardcoding the leading number, in case the assessor renumbers the codes. Do **not** additionally filter on `is_multi_parcel_sale` — the multi-parcel arm's-length category is legitimate and should stay in.
 - Parcels carry a tract GEOID but no block-group GEOID. We do a local point-in-polygon join (parcel centroid → block-group polygon).
 - Permits start 2019-01-02. Feature-years that include permit signals are limited to 2019+; sales-only features go back to 2011.
 - Tax delinquency is Wayne County Treasurer data and is not in any layer above. v1 proxy: unpaid blight balance + parcel `tax_status`. See TODO D.3.
 - `pct_pre_claimed` (Principal Residence Exemption) is the exemption signal. HOPE / PAYS enrollment is not in the parcel file.
+- **Every layer is Detroit-only at the source, confirmed live** — these are the City of Detroit's own published datasets (parcels from its Assessor, permits from BSEED, blight tickets from its own ticketing system), not a broader region filtered down. The block-group layer's 625 rows confirms this: Wayne County alone has roughly 1,200 block groups and Michigan has about 8,200, so 625 lines up with Detroit specifically. No extra geographic filter is applied in `ingest.py` because none is needed.
+- **Blight tickets (904,905 rows) is the largest layer** — nearly double sales and permits combined, and bigger than originally estimated. It dominates the ingest request count: ~1,870 paginated requests across all five layers. With keyset pagination each page is well under a second, so the whole pull should land around 10–15 minutes.
+- All pulled data lives entirely on the local machine: `backend/data/raw/*.parquet` (one file per layer) and `backend/data/signals.duckdb`. Nothing is uploaded anywhere; only the read-only queries to the public ArcGIS endpoints leave the machine.
 
 ## 2. Decisions
 
@@ -107,11 +111,11 @@ Each stage reads only the previous stage's tables. Re-running any stage overwrit
 
 ## 5. Data model (DuckDB)
 
-**Raw** (as pulled, `parcel_id` normalized): `raw_parcels`, `raw_sales`, `raw_permits`, `raw_blight`, `raw_blockgroups` (GEOID + geometry as WKT).
+**Raw** (as pulled, `parcel_id` normalized): `raw_parcels` (centroid_lon/lat instead of full polygons — see §1), `raw_sales`, `raw_permits`, `raw_blight`, `raw_blockgroups` (GEOID + `geometry_json`, the raw Esri-JSON polygon string; `geo.py` parses it, ingest.py does not).
 
 **`parcel_geo`** `(parcel_id PK, bg_geoid, lon, lat)` — output of `geo.py`.
 
-**`sales_clean`** — `raw_sales` filtered to arm's-length, plus:
+**`sales_clean`** — `raw_sales` filtered to arm's-length (`term_of_sale` matches `ARM'S LENGTH`, see §1), `amt_sale_price > 1000`, `sale_date` in `[2011-01-01, today]`, plus:
 - `is_llc_buyer`: grantee matches `\b(LLC|L\.L\.C|INC|CORP|TRUST|HOLDINGS|PROPERTIES|INVEST\w*|VENTURES|GROUP)\b`
 - `is_out_of_state_buyer`: current parcel `taxpayer_state != 'MI'` (snapshot; noted as such)
 - `ppsf`: `amt_sale_price / total_floor_area` where floor area > 200
@@ -130,7 +134,7 @@ Each stage reads only the previous stage's tables. Re-running any stage overwrit
 | `blight_tickets` | tickets issued that year |
 | `vacant_share` | parcels with `is_improved = 0` or vacant-land property class (snapshot) |
 | `owner_occ_share` | parcels with `pct_pre_claimed > 0` (snapshot) |
-| `dist_to_hot_corridor_m` | distance from block-group centroid to nearest of the top-25 block groups by `permit_value` in the prior year |
+| `dist_to_hot_corridor_m` | distance (meters, UTM zone 17N — exact for Detroit) from block-group centroid to nearest of the top-25 block groups by `permit_value` in the prior year; NaN before there's a prior year with permit data (i.e. before 2020) |
 
 **`bg_scores`** `(bg_geoid PK, heat_score INT, predicted_growth DOUBLE, top_signals JSON, model_version, model_mode, scored_at)`.
 
@@ -141,8 +145,8 @@ Each stage reads only the previous stage's tables. Re-running any stage overwrit
 ## 6. Module contracts
 
 ### `ingest.py`
-- `pull_layer(name: str, since: date | None = None) -> Path` — paginates with `resultOffset`/`resultRecordCount=1000`, `returnGeometry` only for parcels (with `returnCentroid=true`) and block groups, retries with backoff, writes `data/raw/{name}.parquet`.
-- `load_all(con)` — parquet → `raw_*` tables, normalizes `parcel_id`.
+- `pull_layer(layer, since=None) -> Path` — keyset-paginates on the layer's `objectIdField` (read from metadata) with `resultRecordCount=1000`, `returnCentroid=true` for parcels, full `returnGeometry` only for block groups, retries with backoff, writes `data/raw/{name}.parquet`.
+- `load_all(con, since=None, resume=False)` — parquet → `raw_*` tables, normalizes `parcel_id`. `resume=True` (CLI `--resume`) skips the network pull for layers whose parquet already exists, so a crashed run continues instead of re-pulling finished layers.
 - Idempotent. `--since` supported for permits, sales, blight.
 
 ### `geo.py`

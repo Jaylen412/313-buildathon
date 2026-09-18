@@ -14,7 +14,12 @@ app = typer.Typer(help="Signals data pipeline and API server.")
 
 
 @app.command()
-def ingest(since: str | None = typer.Option(None, help="YYYY-MM-DD, incremental pull")) -> None:
+def ingest(
+    since: str | None = typer.Option(None, help="YYYY-MM-DD, incremental pull"),
+    resume: bool = typer.Option(
+        False, "--resume", help="Skip pulling layers whose data/raw/*.parquet already exists"
+    ),
+) -> None:
     """Pull all ArcGIS layers into data/raw/*.parquet and load raw_* tables."""
     from datetime import date
 
@@ -22,19 +27,21 @@ def ingest(since: str | None = typer.Option(None, help="YYYY-MM-DD, incremental 
 
     con = connect()
     since_date = date.fromisoformat(since) if since else None
-    ingest_mod.load_all(con, since=since_date)
+    ingest_mod.load_all(con, since=since_date, resume=resume)
     typer.echo("ingest complete")
 
 
 @app.command()
 def features() -> None:
-    """Build sales_clean + bg_features from the raw tables."""
+    """Assign parcels to block groups, build sales_clean + bg_features, and
+    cache the block-group polygons for the map."""
     from signals import features as features_mod
     from signals import geo as geo_mod
 
     con = connect()
     geo_mod.assign_block_groups(con)
     features_mod.build_features(con)
+    geo_mod.export_blockgroups_geojson(con)
     typer.echo("features complete")
 
 

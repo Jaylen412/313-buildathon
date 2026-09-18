@@ -32,8 +32,13 @@ class Layer:
     layer_id: int = 0
 
     @property
+    def layer_url(self) -> str:
+        """Layer metadata endpoint (`?f=json` reports objectIdField etc)."""
+        return f"{ARCGIS_ROOT}/{self.service}/FeatureServer/{self.layer_id}"
+
+    @property
     def query_url(self) -> str:
-        return f"{ARCGIS_ROOT}/{self.service}/FeatureServer/{self.layer_id}/query"
+        return f"{self.layer_url}/query"
 
 
 PARCELS = Layer(
