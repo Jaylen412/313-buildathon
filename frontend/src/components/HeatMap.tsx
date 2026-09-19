@@ -1,5 +1,5 @@
 /**
- * Leaflet choropleth of scored block groups. Esri light-gray canvas basemap
+ * Leaflet choropleth of scored block groups. Esri dark-gray canvas basemap
  * (no API key). Hover shows neighborhood + score; click selects for the drawer.
  * Low-confidence block groups (< 3 sales in the scoring year) draw with a
  * dashed border so the map never over-claims.
@@ -25,7 +25,7 @@ function styleFor(feature: BlockFeature, selected: boolean): PathOptions {
   return {
     fillColor: heatColor(p.heat_score),
     fillOpacity: p.heat_score == null ? 0.35 : 0.72,
-    color: selected ? "#0b0b0b" : "#898781",
+    color: selected ? "#ffffff" : "#5b5a54",
     weight: selected ? 2.5 : 0.6,
     dashArray: p.confidence === "low" ? "3 3" : undefined,
   };
@@ -87,11 +87,12 @@ export function HeatMap({ blocks, selectedGeoid, onSelect }: HeatMapProps) {
   const data = useMemo(() => blocks, [blocks]);
 
   return (
-    <MapContainer center={DETROIT_CENTER} zoom={11} style={{ height: "100%", width: "100%" }} preferCanvas>
-      {/* Esri's light-gray canvas: keyless, quiet enough for a choropleth. CARTO's
-          basemaps now watermark "API KEY REQUIRED" without a key. */}
+    <MapContainer center={DETROIT_CENTER} zoom={11.5} style={{ height: "100%", width: "100%" }} preferCanvas>
+      {/* Esri's dark-gray canvas: keyless, same service tier as the light-gray
+          base this replaced. CARTO's basemaps now watermark "API KEY REQUIRED"
+          without a key. */}
       <TileLayer
-        url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+        url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
         attribution="Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ"
         maxZoom={16}
       />

@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from threading import Lock
 
 import duckdb
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from signals import brief, demo, store, vulnerability
@@ -140,11 +140,19 @@ def get_block(geoid: str) -> dict:
 
 
 @app.get("/api/blocks/{geoid}/households")
-def get_households(geoid: str, x_org_token: str | None = Header(default=None)) -> dict:
+def get_households(
+    geoid: str,
+    limit: int = Query(25, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    x_org_token: str | None = Header(default=None),
+) -> dict:
     """Gated: owner-occupied households on a hot block group, ranked by
-    exposure with a reason per term. Computed live on the read-only
-    connection (persist=False); anonymized when SIGNALS_DEMO=1. Block groups
-    below the hot threshold return hot=false and no households."""
+    exposure with a reason per term. Paginated — `limit` (default 25, max
+    200) and `offset` — for the frontend's infinite scroll; `total` and
+    `has_more` describe the full ranked set regardless of page size.
+    Computed live on the read-only connection (persist=False); anonymized
+    when SIGNALS_DEMO=1. Block groups below the hot threshold return
+    hot=false and no households."""
     require_org_token(x_org_token)
     settings = get_settings()
     con = get_con()
@@ -154,9 +162,11 @@ def get_households(geoid: str, x_org_token: str | None = Header(default=None)) -
         if not con.execute("SELECT count(*) FROM bg_scores WHERE bg_geoid = ?", [geoid]).fetchone()[0]:
             raise HTTPException(status_code=404, detail=f"unknown block group {geoid}")
         hot = vulnerability.is_hot(con, geoid, vulnerability.DEFAULT_HOT_THRESHOLD)
-        households = [h.to_dict() for h in vulnerability.rank(con, geoid, persist=False)] if hot else []
+        ranked = vulnerability.rank(con, geoid, persist=False) if hot else []
     finally:
         con.close()
+    total = len(ranked)
+    households = [h.to_dict() for h in ranked[offset : offset + limit]]
     if settings.signals_demo:
         households = [demo.anonymize_household(h) for h in households]
     return {
@@ -166,6 +176,10 @@ def get_households(geoid: str, x_org_token: str | None = Header(default=None)) -
         "anonymized": settings.signals_demo,
         "heirship_note": vulnerability.HEIRSHIP_REASON,
         "households": households,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + limit < total,
     }
 
 

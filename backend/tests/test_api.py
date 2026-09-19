@@ -146,6 +146,35 @@ def test_households_cold_block_group_returns_hot_false(client, monkeypatch):
     assert client.get("/api/blocks/nope/households", headers={"X-Org-Token": "secret"}).status_code == 404
 
 
+def _fake_many_households(con, geoid, hot_threshold=70, persist=True, today=None):
+    from signals.vulnerability import Household
+
+    return [
+        Household(parcel_id=f"p{i}", bg_geoid=geoid, rank=i + 1, score=10 - i * 0.1, reasons=[], heirship_flag=False,
+                   address=f"{i} MAIN ST", owner="OWNER", tenure_years=1.0, has_pre=True,
+                   unpaid_blight_balance=0.0, uncapping_gap=None)
+        for i in range(60)
+    ]
+
+
+def test_households_default_page_is_25_with_pagination_metadata(client, monkeypatch):
+    monkeypatch.setattr(api.vulnerability, "rank", _fake_many_households)
+    monkeypatch.setattr(api.vulnerability, "is_hot", lambda con, g, t: True)
+    body = client.get("/api/blocks/A/households", headers={"X-Org-Token": "secret"}).json()
+    assert len(body["households"]) == 25
+    assert body["total"] == 60 and body["offset"] == 0 and body["limit"] == 25 and body["has_more"] is True
+    assert body["households"][0]["rank"] == 1
+
+
+def test_households_offset_advances_pages_until_exhausted(client, monkeypatch):
+    monkeypatch.setattr(api.vulnerability, "rank", _fake_many_households)
+    monkeypatch.setattr(api.vulnerability, "is_hot", lambda con, g, t: True)
+    page2 = client.get("/api/blocks/A/households?offset=25", headers={"X-Org-Token": "secret"}).json()
+    assert len(page2["households"]) == 25 and page2["households"][0]["rank"] == 26 and page2["has_more"] is True
+    page3 = client.get("/api/blocks/A/households?offset=50", headers={"X-Org-Token": "secret"}).json()
+    assert len(page3["households"]) == 10 and page3["has_more"] is False
+
+
 def test_brief_route_returns_cached_flag_and_brief(client, monkeypatch):
     from signals import brief as brief_mod
 
