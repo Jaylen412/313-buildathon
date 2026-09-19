@@ -221,6 +221,123 @@ Detroit ArcGIS  ──▶  ingest.py   ──▶  data/raw/*.parquet  ──▶ 
                      frontend (map + drawer)
 ```
 
+### Machine learning method
+
+One supervised model does the forecasting; nothing else in the pipeline is
+learned. `forecast.py` trains and scores it; `vulnerability.py`'s household
+ranking is hand-fitted rules, and the OpenAI call in `brief.py` only writes
+prose from numbers the model already produced (constraint 1, above).
+
+**Framing.** Block-group-year is the unit of prediction. The target is the
+two-year forward change in sale price per square foot, in log space:
+
+```
+target = log(median_ppsf[block group, year T+2]) - log(median_ppsf[block group, year T])
+```
+
+Log-differencing turns the target into a growth rate, so a $30/sqft block
+group and a $90/sqft block group are on the same scale. Rows are dropped
+where either end has fewer than 5 arm's-length sales or a starting
+`median_ppsf` under $20 — under those floors the ratio is sale-mix noise, not
+market movement (`MIN_SALES_FOR_TARGET`, `MIN_PPSF_FOR_TARGET` in
+`forecast.py`).
+
+**Algorithm.** `sklearn.ensemble.HistGradientBoostingRegressor` — histogram-based
+gradient-boosted trees, scikit-learn's default choice for tabular data at this
+size. It needs no feature scaling, handles the nonlinear thresholds this data
+has (a corridor is close or it isn't; a block flips from majority-owner to
+majority-LLC sales), and trains in seconds on ~2,600 rows, which ruled out
+anything that wants a larger sample or a GPU.
+
+**Features fed to the model** — nine columns, all derived from the current or
+prior year, never from the target year:
+
+| Feature | What it captures |
+|---|---|
+| `n_sales` | Sale volume that year (also gates confidence) |
+| `price_yoy` | One-year change in median $/sqft |
+| `llc_share` | Share of sales bought by an LLC or corporate entity |
+| `permit_count` | Building permits issued |
+| `permit_value` | Dollar value of those permits |
+| `new_construction_permits` | New-construction permits specifically |
+| `permit_count_yoy` | One-year change in permit count |
+| `blight_tickets` | Blight violation tickets issued |
+| `dist_to_hot_corridor_m` | Metric distance to the nearest flagged commercial corridor |
+
+**Features deliberately excluded**, both explained in the `forecast.py`
+docstring so they aren't reintroduced by accident:
+
+- `vacant_share`, `owner_occ_share`, `out_of_state_share` — these describe the
+  parcel file *today*. Feeding a present-day snapshot to a model trained on
+  past windows would leak the future into the backtest. They stay in
+  `bg_features` for `vulnerability.py`, which is allowed to look at today.
+- `median_ppsf`, `median_price` — price *levels*. The first real-data run
+  included them, and the model's top signal became "low price level": it
+  ranked $8–22/sqft block groups with a falling prior year as the hottest in
+  the city, because a cheap, thin market has the largest percentage rebounds.
+  That's mean reversion, not investment pressure. Dropping levels forces the
+  model to rank on momentum, LLC buying, permits, blight, and corridor
+  distance — the signals the product actually claims to measure.
+
+**Training / evaluation split.** Time-based, not random, so the backtest
+can't see the future: trained on rows built from years 2011–2022, held out
+2023. From the real run (2026-09-18):
+
+| | |
+|---|---|
+| Training rows | 2,626 |
+| Holdout rows | 425 |
+| Holdout Spearman ρ | 0.386 |
+| Holdout R² | 0.105 |
+| Holdout MAE | 0.215 (vs. 0.229 for predict-the-mean) |
+
+Spearman is the headline metric because the product only needs a *ranking* of
+block groups, not a precise growth number. 0.39 is real but modest skill —
+stated as such everywhere it's surfaced (health route, drawer footnote, demo
+script), never rounded up.
+
+**From prediction to heat score.** The raw model output is a predicted log
+growth rate per block group. The heat score shown on the map is that
+prediction's percentile rank across all 625 block groups that year, 0–100 —
+a relative measure ("hotter than X% of Detroit"), not an absolute forecast.
+
+**Explainability.** `permutation_importance` runs once at train time against
+the holdout set and ranks the nine features by how much shuffling each one
+degrades the model's score. For every scored block group, the top three
+features are picked by that global ranking, then each is converted to a
+z-score against the city that year and given a plain-language label
+(`SIGNAL_LABELS`) and an up/down direction. That's what the drawer and the
+brief show as "top signals" — they come from the model's own importances, not
+from prose written by a language model.
+
+**Fallback path.** Per constraint 4, if training data were too thin (fewer
+than `MIN_TRAINING_ROWS = 500` rows, or holdout Spearman below
+`MIN_BACKTEST_SPEARMAN = 0.2`), `forecast.py` ships a deterministic weighted
+index instead of an unvalidated model:
+
+| Feature | Weight |
+|---|---:|
+| `llc_share` | +0.35 |
+| `price_yoy` | −0.25 |
+| `permit_count_yoy` | +0.15 |
+| `permit_value` | +0.10 |
+| `dist_to_hot_corridor_m` | −0.15 |
+
+These weights are backtested too (Spearman 0.13–0.32 across 2019–2023,
+recorded in `backtest_report.json`), not asserted. An earlier draft weighted
+one-year price momentum positively and was *anti*-predictive on every one of
+those five years — in a thin market, last year's price spike is mostly
+sale-mix noise and reverts, so momentum is now a negative weight. On the real
+2026-09-18 run the trained model cleared both thresholds
+(`auto_mode_decision: "trained"`), so all 625 `bg_scores` rows are
+`model_mode = "trained"`; `MODEL_MODE=fallback` in `.env` forces the index
+path for testing or demo purposes without retraining.
+
+**Reproducing it.** `uv run signals train` retrains from `bg_features`,
+rewrites `data/models/model.joblib` and `backtest_report.json`, and scores all
+625 block groups. `uv run signals score` re-scores from the saved model
+without retraining.
+
 ### Database
 
 DuckDB, one file at `backend/data/signals.duckdb`. Raw pulls are also cached as
