@@ -17,7 +17,10 @@ metrics on the neighborhoods page. The two prompts pull in different
 directions, so they don't share one.
 
 The model sees a NeighborhoodSummary: the roll-up of the neighborhood's block
-groups, its aggregated signals, and five complete years of trend. It never
+groups, where it ranks among the others, its aggregated signals, and eight
+complete years of trend. That is deliberately more than the page's headline
+figures — a paragraph is only worth reading if it is about this place in
+particular, so the model is given the specifics to be specific with. It never
 sees a household row, a name, an address, or a parcel id — the same discipline
 as brief.BlockSummary, and there is a test asserting it.
 
@@ -38,8 +41,16 @@ from signals import store
 from signals.brief import openai_client
 from signals.config import PROTECTIONS, Settings, get_settings
 
-TREND_YEARS = 5
-TREND_METRICS = ("median_ppsf", "n_sales", "llc_share", "permit_count", "blight_tickets")
+# eight complete years, not five: the paragraph's job is to say what is
+# happening to one specific place, and a longer arc is what makes a claim about
+# it specific ("since 2018") rather than generic ("recently"). median_price and
+# permit_value are in because whole dollars are the figures an organizer
+# actually repeats out loud — ppsf alone is a statistic, $42,000 is a house.
+TREND_YEARS = 8
+TREND_METRICS = (
+    "median_ppsf", "median_price", "n_sales", "llc_share",
+    "permit_count", "permit_value", "blight_tickets",
+)
 
 
 class AggregateSignal(BaseModel):
@@ -68,6 +79,9 @@ class NeighborhoodSummary(BaseModel):
     n_hot: int
     heat_max: int
     heat_mean: int
+    heat_min: int
+    rank: int
+    n_neighborhoods: int
     n_low_confidence: int
     hot_threshold: int
     model_mode: str
@@ -117,32 +131,53 @@ Rules:
    "mixed" means the block groups disagree — say so ("the picture is split") and never pick
    a side.
 4. Anything about change over time comes only from the trend arrays, which cover complete
-   years. Use them for the story: what moved, over what span, and by how much. Every trend
-   number describes the WHOLE neighborhood — counts are totals across all its block groups
-   and medians are taken over all of its sales — so never attribute one to a part of it
-   ("one corner had 1,437 blight tickets" is wrong when 1,437 is the neighborhood's total).
-   How widespread something is comes only from the signals' block-group counts, and those
-   two kinds of number must never be mixed in the same claim.
-5. Do NOT recommend, name, or describe any assistance program, tax exemption, payment plan,
+   years. Use them for the story: what moved, over what span, and by how much. `median_price`
+   is the typical whole sale price and `median_ppsf` the same sale by the square foot;
+   `permit_value` is the dollar value of permitted work and `permit_count` how many permits.
+   Every trend number describes the WHOLE neighborhood — counts are totals across all its
+   block groups and medians are taken over all of its sales —
+   so never attribute one to a part of it ("one corner had 1,437 blight tickets" is wrong
+   when 1,437 is the neighborhood's total). How widespread something is comes only from the
+   signals' block-group counts, and those two kinds of number must never be mixed in one claim.
+   Nothing in the trend can support a claim about part of the neighborhood: there is no
+   per-area sales, permit or blight figure here, so "one area saw especially heavy blight
+   ticketing" is invented no matter how the sentence is hedged. Only a signal's block-group
+   count may carry a claim about some parts and not others.
+5. Ground it in this neighborhood, not in neighborhoods generally. Name the place in the
+   first sentence, and carry at least two figures that could only describe it: a year and a
+   number from its trend, where it ranks, or the spread across its block groups. A sentence
+   that would read the same for any neighborhood in Detroit is a wasted sentence.
+   `rank` is where this one sits among the `n_neighborhoods` scored neighborhoods, most
+   pressure first — say it plainly ("4th of 186") when it is worth saying. `heat_max` and
+   `heat_min` are its highest- and lowest-scoring block groups: the gap between them says
+   whether the pressure is concentrated in one corner or spread evenly across the whole
+   place, and either of those is worth a clause.
+6. Do NOT recommend, name, or describe any assistance program, tax exemption, payment plan,
    legal service, or fund. That belongs to a separate outreach brief that uses a vetted list.
    Here you only explain what the numbers say.
-6. Return ONE paragraph of ordinary prose: three or four sentences, 55 to 90 words. No
+7. Return ONE paragraph of ordinary prose: four or five sentences, 75 to 110 words. No
    headings, bullet points, numbered lists, line breaks or bold. Write the way a colleague
    who knows this city would sum it up out loud — plain, specific, unhurried. Someone who
    has not looked at the charts should follow it.
-7. Say what the numbers add up to, not what they are. The figures, the signal list and the
+8. Say what the numbers add up to, not what they are. The figures, the signal list and the
    model's track record are already on the page beside your paragraph, so do not inventory
-   them. Pick the two or three that carry the story, give the figure behind each, and say
+   them. Pick the three or four that carry the story, give the figure behind each, and say
    what they mean together. Lead with what is happening to the neighborhood.
-8. Write numbers the way people say them: percentages, never decimals ("57%", not 0.57);
-   whole dollars ("$48 a square foot", not 48.25); rounded counts. Never use the tool's
-   vocabulary — no "heat", "hot threshold", "heat mean", "low-confidence block groups",
-   "signal", "flagged", "up"/"down" as labels, no z-scores. If some block groups are
-   low-confidence, put it in plain words ("two parts of the neighborhood had too few sales
-   last year to read much into them"); if none are, do not mention confidence at all.
-9. Never describe the model or yourself — no "the model flags", no Spearman, no R squared,
+9. Write numbers the way people say them: percentages, never decimals ("57%", not 0.57);
+   whole dollars ("$48 a square foot", not 48.25); rounded counts. Round every dollar amount
+   over ten thousand to two significant figures — "$4.8 million of permitted work", never
+   "$4,842,287"; "$85,000", never "$84,995". An exact-looking total reads as false precision
+   on a median. Never use the tool's vocabulary — no "heat", "hot threshold", "heat mean",
+   "low-confidence block groups", "signal", "flagged", "up"/"down" as labels, no z-scores.
+   Never print the threshold number or compare a score to it out loud ("six of its nine block
+   groups exceed the hot threshold", "both score above 70"): say how many are under the most
+   pressure, or give the range of scores, and leave the cutoff out of the prose.
+   If some block groups are low-confidence, put it in plain words ("two parts of the
+   neighborhood had too few sales last year to read much into them"); if none are, do not
+   mention confidence at all.
+10. Never describe the model or yourself — no "the model flags", no Spearman, no R squared,
    no "I". Write about the place.
-10. A rising score means money is moving toward the neighborhood. It is not a measure of
+11. A rising score means money is moving toward the neighborhood. It is not a measure of
    displacement and says nothing about any individual resident. Carry that honestly in the
    prose rather than appending a disclaimer sentence.
 """
@@ -167,6 +202,9 @@ def build_neighborhood_summary(
         n_hot=detail["n_hot"],
         heat_max=detail["heat_max"],
         heat_mean=detail["heat_mean"],
+        heat_min=detail["heat_min"],
+        rank=detail["rank"],
+        n_neighborhoods=detail["n_neighborhoods"],
         n_low_confidence=detail["n_low_confidence"],
         hot_threshold=detail["hot_threshold"],
         model_mode=detail["model_mode"],

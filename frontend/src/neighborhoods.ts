@@ -32,27 +32,41 @@ export function matchNeighborhoods(rows: NeighborhoodRow[], query: string): Neig
   return [...prefix, ...interior];
 }
 
-export type SortKey = "heat_max" | "n_hot" | "heat_mean";
+export type SortKey = "name_asc" | "name_desc" | "score_asc" | "score_desc";
 
 export const SORT_OPTIONS: { key: SortKey; label: string; hint: string }[] = [
-  { key: "heat_max", label: "Hottest block", hint: "by the highest-scoring block group" },
-  { key: "n_hot", label: "Most hot blocks", hint: "by how many block groups are above the threshold" },
-  { key: "heat_mean", label: "Average", hint: "by the mean score across block groups" },
+  { key: "name_asc", label: "A-Z", hint: "alphabetically, A to Z" },
+  { key: "name_desc", label: "Z-A", hint: "alphabetically, Z to A" },
+  { key: "score_asc", label: "Score Low-High", hint: "by the highest-scoring block group, lowest first" },
+  { key: "score_desc", label: "Score High-Low", hint: "by the highest-scoring block group, highest first" },
 ];
 
 /**
- * Most at risk first. The chosen key leads, then the same tiebreaks the API
- * uses, so the order is total and stable however it is sorted.
+ * The chosen key leads, then the same tiebreaks the API uses, so the order is
+ * total and stable however it is sorted.
  */
 export function sortRows(rows: NeighborhoodRow[], key: SortKey): NeighborhoodRow[] {
   const ranked = [...rows];
   ranked.sort((a, b) => {
-    if (key === "n_hot" && b.n_hot !== a.n_hot) return b.n_hot - a.n_hot;
-    if (key === "heat_mean" && b.heat_mean !== a.heat_mean) return b.heat_mean - a.heat_mean;
+    if (key === "name_asc") return a.name.localeCompare(b.name);
+    if (key === "name_desc") return b.name.localeCompare(a.name);
+    if (key === "score_asc" && a.heat_max !== b.heat_max) return a.heat_max - b.heat_max;
     if (b.heat_max !== a.heat_max) return b.heat_max - a.heat_max;
     if (b.n_hot !== a.n_hot) return b.n_hot - a.n_hot;
     if (b.heat_mean !== a.heat_mean) return b.heat_mean - a.heat_mean;
     return a.name.localeCompare(b.name);
   });
   return ranked;
+}
+
+/**
+ * "1st", "2nd", "3rd", "11th" — English ordinals, teens included. Used for a
+ * neighborhood's city rank, which the explainer paragraph may cite, so the
+ * page has to show the same figure.
+ */
+export function ordinal(n: number): string {
+  const rem100 = n % 100;
+  if (rem100 >= 11 && rem100 <= 13) return `${n}th`;
+  const suffix = { 1: "st", 2: "nd", 3: "rd" }[n % 10] ?? "th";
+  return `${n}${suffix}`;
 }

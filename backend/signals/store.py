@@ -298,19 +298,27 @@ def _rank_key(row: dict) -> tuple:
     return (-row["heat_max"], -row["n_hot"], -row["heat_mean"], row["name"])
 
 
+def _ranked_rollups(
+    members: dict[str, list[str]], scores: dict[str, dict], hot_threshold: int
+) -> list[dict]:
+    """Every scored neighborhood's roll-up, most at risk first. Pure: takes the
+    two lookups already in hand so a caller that needs both one neighborhood and
+    its city rank doesn't re-run the parcel join behind `neighborhood_members`."""
+    rows = [
+        row
+        for name, geoids in members.items()
+        if (row := _rollup(name, geoids, scores, hot_threshold)) is not None
+    ]
+    rows.sort(key=_rank_key)
+    return rows
+
+
 def neighborhood_list(
     con: duckdb.DuckDBPyConnection, hot_threshold: int = DEFAULT_HOT_THRESHOLD
 ) -> list[dict]:
     """Every named neighborhood, ordered most at risk first. Raises
     NotScoredError when `signals train` hasn't run."""
-    scores = all_scores(con)
-    rows = []
-    for name, geoids in neighborhood_members(con).items():
-        row = _rollup(name, geoids, scores, hot_threshold)
-        if row is not None:
-            rows.append(row)
-    rows.sort(key=_rank_key)
-    return rows
+    return _ranked_rollups(neighborhood_members(con), all_scores(con), hot_threshold)
 
 
 def neighborhood_trend(con: duckdb.DuckDBPyConnection, geoids: list[str]) -> dict:
@@ -382,8 +390,9 @@ def neighborhood_detail(
     report: dict | None,
     hot_threshold: int = DEFAULT_HOT_THRESHOLD,
 ) -> dict | None:
-    """One neighborhood: its roll-up, the aggregated trend, and its member
-    block groups ranked most at risk first. None for an unknown slug."""
+    """One neighborhood: its roll-up, where it sits among the others, the
+    aggregated trend, and its member block groups ranked most at risk first.
+    None for an unknown slug."""
     scores = all_scores(con)
     members = neighborhood_members(con)
     name = slug_index(members).get(slug)
@@ -397,8 +406,15 @@ def neighborhood_detail(
         (scores[g] for g in geoids if g in scores),
         key=lambda s: (-s["heat_score"], s["bg_geoid"]),
     )
+    # city rank from the same order the list page uses, off the lookups already
+    # loaded above — this place only means something next to the other 185
+    ranked = _ranked_rollups(members, scores, hot_threshold)
+    rank = next(i for i, r in enumerate(ranked, 1) if r["name"] == name)
     return {
         **row,
+        "rank": rank,
+        "n_neighborhoods": len(ranked),
+        "heat_min": block_groups[-1]["heat_score"],
         "hot_threshold": hot_threshold,
         "model_mode": block_groups[0]["model_mode"],
         "scored_at": block_groups[0]["scored_at"],

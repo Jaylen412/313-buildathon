@@ -11,6 +11,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ApiError, fetchNeighborhood, type AggregateSignal } from "../api";
 import { heatColor, inkOn } from "../heat";
+import { ordinal } from "../neighborhoods";
 import { Trend } from "./Trend";
 import { ExplainerPanel } from "./ExplainerPanel";
 
@@ -67,7 +68,13 @@ export function NeighborhoodDetail({ slug, onOpenBlock }: NeighborhoodDetailProp
           <h2>{data.name}</h2>
           <div className="muted nb-detail-sub">
             {data.n_hot} of {data.n_block_groups} block group{data.n_block_groups === 1 ? "" : "s"} at{" "}
-            {data.hot_threshold}+ · average {data.heat_mean} · hottest {data.heat_max}
+            {data.hot_threshold}+ · average {data.heat_mean} ·{" "}
+            {data.heat_min === data.heat_max
+              ? `scores ${data.heat_max}`
+              : `scores ${data.heat_min}–${data.heat_max}`}
+          </div>
+          <div className="muted nb-detail-sub">
+            {ordinal(data.rank)} of {data.n_neighborhoods} neighborhoods by investment pressure
           </div>
         </div>
         <div

@@ -19,7 +19,7 @@ interface NeighborhoodsViewProps {
 
 export function NeighborhoodsView({ selectedSlug, onSelectSlug, onOpenBlock }: NeighborhoodsViewProps) {
   const [query, setQuery] = useState("");
-  const [sort, setSort] = useState<SortKey>("heat_max");
+  const [sort, setSort] = useState<SortKey>("score_desc");
   const list = useQuery({ queryKey: ["neighborhoods"], queryFn: fetchNeighborhoods });
 
   // stable identity: `?? []` would be a fresh array on every render
@@ -33,10 +33,9 @@ export function NeighborhoodsView({ selectedSlug, onSelectSlug, onOpenBlock }: N
   return (
     <div className="nb-layout">
       <section className="nb-pane nb-pane-list" aria-label="Neighborhoods">
-        <h2 className="nb-title">Neighborhoods</h2>
-        <p className="muted nb-intro">
-          Ranked by forecast investment pressure, rolled up from the block groups in each neighborhood.
-        </p>
+        <h2 className="nb-title" style={{ marginBottom: "1rem" }}>
+          Neighborhoods
+        </h2>
         {list.isLoading && (
           <div className="skeleton" aria-busy="true" aria-label="Loading neighborhoods">
             <div className="skeleton-line w80" />

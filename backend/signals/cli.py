@@ -159,8 +159,8 @@ def explain(
         if result is None:
             typer.echo(f"{s}: unknown neighborhood")
             continue
-        summary, cached, built = result
-        typer.echo(f"{s} ({built.name}): {'cached' if cached else 'generated'} — {summary.headline}")
+        explainer, cached, built = result
+        typer.echo(f"{s} ({built.name}): {'cached' if cached else 'generated'} — {explainer.summary}")
 
 
 @app.command()

@@ -220,6 +220,19 @@ def test_detail_ranks_members_and_carries_the_footnote(con):
     assert detail["trend"]["years"]
 
 
+def test_detail_carries_the_city_rank_and_the_score_spread(con):
+    # the explainer paragraph is only worth reading if it is about this place
+    # in particular, and a rank ("1st of 2") and the gap between the hottest
+    # and coolest block group are the two facts that place it
+    top = store.neighborhood_detail(con, "fitzgerald-marygrove", None)
+    assert (top["rank"], top["n_neighborhoods"]) == (1, 2)
+    assert (top["heat_max"], top["heat_min"]) == (98, 72)
+    cool = store.neighborhood_detail(con, "claytown", None)
+    assert cool["rank"] == 2
+    # one block group: the spread is a point, not a range
+    assert (cool["heat_max"], cool["heat_min"]) == (30, 30)
+
+
 def test_detail_unknown_slug_is_none(con):
     assert store.neighborhood_detail(con, "not-a-place", None) is None
 

@@ -224,6 +224,11 @@ export interface NeighborhoodMember {
 }
 
 export interface NeighborhoodDetail extends NeighborhoodRow {
+  /** Position among `n_neighborhoods` scored neighborhoods, most pressure first. */
+  rank: number;
+  n_neighborhoods: number;
+  /** Lowest-scoring member block group; with heat_max it gives the spread. */
+  heat_min: number;
   hot_threshold: number;
   model_mode: ModelMode;
   scored_at: string;

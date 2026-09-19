@@ -24,6 +24,9 @@ def _detail() -> dict:
         "n_hot": 6,
         "heat_max": 98,
         "heat_mean": 72,
+        "heat_min": 41,
+        "rank": 4,
+        "n_neighborhoods": 186,
         "hottest_geoid": "261635101001",
         "n_low_confidence": 0,
         "hot_threshold": 70,
@@ -39,19 +42,25 @@ def _detail() -> dict:
              "n_block_groups": 9, "n_up": 6, "n_down": 0},
         ],
         "trend": {
-            "years": [2019, 2020, 2021, 2022, 2023, 2024, 2025, THIS_YEAR],
+            "years": [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, THIS_YEAR],
             "series": {
-                "n_sales": [100.0, 120.0, 159.0, 180.0, 190.0, 204.0, 194.0, 90.0],
-                "median_ppsf": [20.0, 28.0, 35.72, 40.0, 44.0, 51.89, 48.25, 50.0],
-                "median_price": [1.0] * 8,
-                "llc_share": [0.7, 0.68, 0.65, 0.6, 0.52, 0.55, 0.57, 0.58],
-                "permit_count": [60.0, 62.0, 75.0, 65.0, 74.0, 68.0, 71.0, 30.0],
-                "permit_value": [1.0] * 8,
-                "blight_tickets": [900.0, 1000.0, 1200.0, 1500.0, 2011.0, 1391.0, 1605.0, 700.0],
+                "n_sales": [80.0, 90.0, 100.0, 120.0, 159.0, 180.0, 190.0, 204.0, 194.0, 90.0],
+                "median_ppsf": [14.0, 17.0, 20.0, 28.0, 35.72, 40.0, 44.0, 51.89, 48.25, 50.0],
+                "median_price": [12000.0, 15000.0, 18000.0, 24000.0, 31000.0,
+                                 36000.0, 40000.0, 47000.0, 44000.0, 45000.0],
+                "llc_share": [0.72, 0.71, 0.7, 0.68, 0.65, 0.6, 0.52, 0.55, 0.57, 0.58],
+                "permit_count": [50.0, 55.0, 60.0, 62.0, 75.0, 65.0, 74.0, 68.0, 71.0, 30.0],
+                "permit_value": [4.1e5, 5.0e5, 6.2e5, 7.0e5, 9.4e5,
+                                 1.1e6, 1.3e6, 1.2e6, 1.4e6, 6.0e5],
+                "blight_tickets": [700.0, 800.0, 900.0, 1000.0, 1200.0,
+                                   1500.0, 2011.0, 1391.0, 1605.0, 700.0],
             },
             "partial_year": THIS_YEAR,
         },
-        "block_groups": [{"bg_geoid": "261635101001", "heat_score": 98, "confidence": "ok", "top_signals": []}],
+        "block_groups": [
+            {"bg_geoid": "261635101001", "heat_score": 98, "confidence": "ok", "top_signals": []},
+            {"bg_geoid": "261635101002", "heat_score": 41, "confidence": "ok", "top_signals": []},
+        ],
     }
 
 
@@ -103,12 +112,23 @@ def test_summary_is_aggregate_only(patched):
         assert leak not in payload, f"{leak} reached the model"
 
 
-def test_summary_drops_the_partial_year_and_keeps_five(patched):
+def test_summary_drops_the_partial_year_and_keeps_the_window(patched):
     summary = explain.build_neighborhood_summary(None, "bethune-community", None)
-    assert summary.trend_years == [2021, 2022, 2023, 2024, 2025]
+    assert summary.trend_years == [2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
     assert THIS_YEAR not in summary.trend_years
     assert set(summary.trend) == set(explain.TREND_METRICS)
-    assert len(summary.trend["n_sales"]) == 5
+    assert len(summary.trend["n_sales"]) == explain.TREND_YEARS
+
+
+def test_summary_carries_the_figures_that_make_it_specific(patched):
+    # a paragraph is only worth reading if it is about this place in
+    # particular: whole-dollar prices, permitted-work dollars, the city rank
+    # and the spread across its block groups are what let it be
+    summary = explain.build_neighborhood_summary(None, "bethune-community", None)
+    assert (summary.rank, summary.n_neighborhoods) == (4, 186)
+    assert (summary.heat_max, summary.heat_min) == (98, 41)
+    assert summary.trend["median_price"][-1] == 44000.0
+    assert summary.trend["permit_value"][-1] == 1.4e6
 
 
 def test_summary_carries_mixed_signal_counts(patched):
@@ -198,7 +218,7 @@ def test_output_is_a_single_paragraph():
 
 def test_prompt_asks_for_one_paragraph():
     assert "ONE paragraph of ordinary prose" in explain.SYSTEM_PROMPT
-    assert "three or four sentences" in explain.SYSTEM_PROMPT
+    assert "four or five sentences" in explain.SYSTEM_PROMPT
     for banned in ("bullet points", "numbered lists", "line breaks"):
         assert banned in explain.SYSTEM_PROMPT
 
@@ -283,3 +303,16 @@ def test_prompt_separates_neighborhood_totals_from_per_block_counts():
     # a real call attributed the neighborhood's 1,437 blight tickets to "one part"
     assert "describes the WHOLE neighborhood" in explain.SYSTEM_PROMPT
     assert "never attribute one to a part" in explain.SYSTEM_PROMPT
+
+
+def test_prompt_demands_neighborhood_specific_detail():
+    # the first version wrote paragraphs that opened "money is moving toward
+    # the neighborhood" and never named it — true of the place, and of 185
+    # others. The figures that can only describe one place are the point.
+    assert "Ground it in this neighborhood" in explain.SYSTEM_PROMPT
+    assert "Name the place in the" in explain.SYSTEM_PROMPT
+    assert "at least two figures that could only describe it" in explain.SYSTEM_PROMPT
+    assert "is a wasted sentence" in explain.SYSTEM_PROMPT
+    # and it must know how to read the two fields added for that job
+    assert "`rank` is where this one sits" in explain.SYSTEM_PROMPT
+    assert "highest- and lowest-scoring block groups" in explain.SYSTEM_PROMPT

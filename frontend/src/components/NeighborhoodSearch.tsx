@@ -70,8 +70,8 @@ export function NeighborhoodSearch({ rows, query, onQueryChange, onSelect }: Nei
         ref={inputRef}
         type="search"
         className="nb-search-input"
-        placeholder="Search neighborhoods…"
-        aria-label="Search neighborhoods"
+        placeholder="Search neighborhood"
+        aria-label="Search neighborhood"
         role="combobox"
         aria-expanded={expanded}
         aria-controls="nb-listbox"
