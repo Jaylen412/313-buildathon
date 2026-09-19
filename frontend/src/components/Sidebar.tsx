@@ -1,9 +1,9 @@
-import type { ViewName } from "../App";
+import type { ViewName } from "../views";
 
 const TOP_ITEMS: { key: ViewName; label: string; icon: string }[] = [
   { key: "home", label: "Home", icon: "home" },
   { key: "map", label: "Map", icon: "map" },
-  { key: "residents", label: "Residents", icon: "person" },
+  { key: "neighborhoods", label: "Neighborhoods", icon: "family_group" },
   { key: "insights", label: "Insights", icon: "insights" },
 ];
 

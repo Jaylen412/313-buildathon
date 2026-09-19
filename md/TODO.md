@@ -64,7 +64,7 @@ Urgency: 🔴 do now · 🟡 before the first end-to-end run · 🟢 before the 
 - [ ] 🔴 **Confirm submission format**: live demo or video, time limit, whether judges want a repo link, and the deadline. Tell me the deadline so build order can be cut accordingly.
 - [ ] 🔴 **Assign ownership** if there is more than one builder: backend pipeline vs frontend map. Otherwise I build in the milestone order in `architecture.md` §7.
 - [ ] 🟢 **Draft the 3-minute demo script** from `signal-details.md` "The 3-minute demo". The risks slide must state the household-gating policy out loud.
-- [ ] 🟢 **Assume bad venue Wi-Fi**: everything runs locally from DuckDB except `/brief`. Pre-generate the briefs for your demo block groups the morning of — `cd backend && uv run signals brief <geoid> <geoid> …` — and they're served from `backend/data/briefs/` with no network. (Hubbard Richard, `261635211002`, is already cached from the first live run.)
+- [ ] 🟢 **Assume bad venue Wi-Fi**: everything runs locally from DuckDB except `/brief`. Pre-generate the briefs for your demo block groups the morning of — `cd backend && uv run signals brief <geoid> <geoid> …` — and they're served from `backend/data/briefs/` with no network. (Hubbard Richard, `261635211002`, is already cached from the first live run.) Do the same for the neighborhoods page — `uv run signals explain <slug…>` caches under `backend/data/explainers/` (Bethune Community is already cached).
 
 ## F. After the first end-to-end run
 

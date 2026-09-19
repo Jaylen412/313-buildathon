@@ -7,16 +7,20 @@ import { HeatMap, Legend } from "./components/HeatMap";
 import { BlockDrawer } from "./components/BlockDrawer";
 import { Sidebar } from "./components/Sidebar";
 import { PlaceholderView } from "./components/PlaceholderView";
+import { NeighborhoodsView } from "./components/NeighborhoodsView";
 import { ApiError, fetchBlocks, fetchHealth } from "./api";
+import type { ViewName } from "./views";
 import "./App.css";
 
-export type ViewName = "home" | "map" | "residents" | "insights" | "settings";
+export type { ViewName };
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 60_000 } } });
 
 function Shell() {
   const [activeView, setActiveView] = useState<ViewName>("map");
   const [selectedGeoid, setSelectedGeoid] = useState<string | null>(null);
+  // lifted so a neighborhood stays selected across a trip to the map and back
+  const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const blocks = useQuery({ queryKey: ["blocks"], queryFn: fetchBlocks });
   const health = useQuery({ queryKey: ["health"], queryFn: fetchHealth, refetchInterval: 30_000, retry: 1 });
   const scored = blocks.data?.features.filter((f) => f.properties.heat_score != null).length ?? 0;
@@ -68,10 +72,14 @@ function Shell() {
           {activeView === "home" && (
             <PlaceholderView title="Home" description="A dashboard overview of Detroit displacement risk is coming soon." />
           )}
-          {activeView === "residents" && (
-            <PlaceholderView
-              title="Residents"
-              description="Household-level search and detail across all block groups is coming soon."
+          {activeView === "neighborhoods" && (
+            <NeighborhoodsView
+              selectedSlug={selectedSlug}
+              onSelectSlug={setSelectedSlug}
+              onOpenBlock={(geoid) => {
+                setSelectedGeoid(geoid);
+                setActiveView("map");
+              }}
             />
           )}
           {activeView === "insights" && (

@@ -178,3 +178,76 @@ export const generateBrief = (geoid: string, force = false) =>
     method: "POST",
     headers: orgHeaders(),
   });
+
+/**
+ * Neighborhoods. A neighborhood is the set of block groups sharing a
+ * parcel-file neighborhood name (186 names over 625 block groups), rolled up
+ * in deterministic SQL — not a second model. `mean_z` is an average of
+ * separate per-block-group comparisons, so it is NOT a z-score for the
+ * neighborhood: only ever render a signal as "in k of n block groups".
+ */
+export type SignalDirection = "up" | "down" | "mixed";
+
+export interface AggregateSignal {
+  feature: string;
+  label: string;
+  direction: SignalDirection;
+  mean_z: number;
+  n_members: number;
+  n_block_groups: number;
+  n_up: number;
+  n_down: number;
+}
+
+export interface NeighborhoodRow {
+  name: string;
+  slug: string;
+  n_block_groups: number;
+  n_hot: number;
+  heat_max: number;
+  heat_mean: number;
+  hottest_geoid: string;
+  n_low_confidence: number;
+  top_signals: AggregateSignal[];
+}
+
+export interface NeighborhoodsResponse {
+  hot_threshold: number;
+  neighborhoods: NeighborhoodRow[];
+}
+
+export interface NeighborhoodMember {
+  bg_geoid: string;
+  heat_score: number;
+  confidence: Confidence;
+  top_signals: TopSignal[];
+}
+
+export interface NeighborhoodDetail extends NeighborhoodRow {
+  hot_threshold: number;
+  model_mode: ModelMode;
+  scored_at: string;
+  backtest_summary: string;
+  trend: Trend;
+  block_groups: NeighborhoodMember[];
+}
+
+export interface NeighborhoodSummaryResponse {
+  name: string;
+  slug: string;
+  cached: boolean;
+  llm_model: string;
+  /** One paragraph of plain prose explaining what the metrics add up to. */
+  summary: string;
+}
+
+export const fetchNeighborhoods = () => apiFetch<NeighborhoodsResponse>("/api/neighborhoods");
+
+export const fetchNeighborhood = (slug: string) =>
+  apiFetch<NeighborhoodDetail>(`/api/neighborhoods/${encodeURIComponent(slug)}`);
+
+export const generateNeighborhoodSummary = (slug: string, force = false) =>
+  apiFetch<NeighborhoodSummaryResponse>(
+    `/api/neighborhoods/${encodeURIComponent(slug)}/summary${force ? "?force=true" : ""}`,
+    { method: "POST", headers: orgHeaders() },
+  );

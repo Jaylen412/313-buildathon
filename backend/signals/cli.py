@@ -142,6 +142,28 @@ def brief(
 
 
 @app.command()
+def explain(
+    slug: list[str] = typer.Argument(..., help="neighborhood slug(s), e.g. dexter-linwood"),
+    force: bool = typer.Option(False, "--force", help="regenerate even if cached"),
+) -> None:
+    """Pre-generate (and cache under data/explainers/) the plain-language metric
+    summary for the given neighborhoods — run this for the demo neighborhoods
+    beforehand so the page works without Wi-Fi (md/TODO.md E.4)."""
+    from signals import explain as explain_mod
+    from signals import forecast as forecast_mod
+
+    con = connect()
+    report = forecast_mod.load_report()
+    for s in slug:
+        result = explain_mod.get_or_create_explainer(con, s, report, force=force)
+        if result is None:
+            typer.echo(f"{s}: unknown neighborhood")
+            continue
+        summary, cached, built = result
+        typer.echo(f"{s} ({built.name}): {'cached' if cached else 'generated'} — {summary.headline}")
+
+
+@app.command()
 def serve(host: str = "127.0.0.1", port: int = 8000, reload: bool = True) -> None:
     """Run the FastAPI app."""
     uvicorn.run("signals.api:app", host=host, port=port, reload=reload)

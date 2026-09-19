@@ -190,7 +190,8 @@ def summary_to_prompt(summary: BlockSummary) -> str:
 # generation + cache
 # ---------------------------------------------------------------------------
 
-def _client(settings: Settings):
+def openai_client(settings: Settings):
+    """Shared by explain.py — keep it public."""
     from openai import OpenAI
 
     if not settings.openai_api_key:
@@ -203,7 +204,7 @@ def generate_brief(summary: BlockSummary, settings: Settings | None = None, clie
     (responses.parse + text_format) using settings.openai_model. `client` is
     injectable for tests."""
     settings = settings or get_settings()
-    client = client or _client(settings)
+    client = client or openai_client(settings)
     response = client.responses.parse(
         model=settings.openai_model,
         instructions=SYSTEM_PROMPT,

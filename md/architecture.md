@@ -48,6 +48,9 @@ Gotchas confirmed against the live endpoints:
 | Frontend | Vite + React + TypeScript, `react-leaflet`, TanStack Query, plain CSS | Two screens; no design system needed. |
 | Basemap | Esri World Light Gray Base raster tiles | No API key. CARTO Positron was the first choice but now watermarks tiles "API KEY REQUIRED" without a key (seen live 2026-09-18). |
 | LLM call | OpenAI Python SDK, Responses API with Structured Outputs (`strict: true` JSON schema generated from the `Brief` Pydantic model); model from `OPENAI_MODEL` env var | User has existing OpenAI credits. Schema-enforced output; model is swappable without code changes. |
+| Neighborhood grouping | The set of block groups sharing a majority-vote parcel `neighborhood` name (186 names over all 625 block groups) | The parcel file is the only source of neighborhood names; block-group polygons carry none. A block group belongs wholly to one name, so **edges are approximate** — the page says so and always shows the member GEOIDs. |
+| Neighborhood ranking | Roll-up of the existing block-group scores: `heat_max` leads, with client-side toggles for hot-count and mean | Deliberately *not* a new composite score — that would be a second, unbacktested model, which "scoring stays deterministic and in code" exists to prevent. The real data disagrees about "most at risk" (Happy Homes is 1 block group at 100; Bethune Community is 6 of 9 above 70), so both orders are offered rather than one picked silently. |
+| Aggregated signals | Counted across member block groups (`n_members`, `n_up`, `n_down`) with a ≥⅔ majority for a direction, else `mixed` | A majority-wins rule published falsehoods: Bethune Community's `price_yoy` is 5 members down, 4 up, which would have read "below the city in 9 of 9 block groups". Also: a mean of cross-sectional z-scores is **not** a z-score for the neighborhood (the city-wide distribution was over block groups), so `mean_z` may only ever be rendered as "in k of n block groups". |
 | Household gating | `X-Org-Token` header must equal `SIGNALS_ORG_TOKEN`; `SIGNALS_DEMO=1` anonymizes | Spec's non-negotiable: only block-level is public. The token is a single shared secret standing in for "organization accounts"; real login is out of scope for the hackathon. |
 
 ## 3. Repo layout
@@ -68,11 +71,13 @@ Gotchas confirmed against the live endpoints:
 │   │   ├── features.py           # bg_features (block group × year)
 │   │   ├── forecast.py           # train / backtest / score; fallback index
 │   │   ├── vulnerability.py      # owner-occupied parcel ranking on hot block groups
-│   │   ├── brief.py              # LLM outreach brief (OpenAI), schema-constrained
+│   │   ├── brief.py              # LLM outreach brief (OpenAI), schema-constrained; owns openai_client()
+│   │   ├── explain.py            # LLM plain-language metric explainer for a neighborhood
 │   │   ├── demo.py               # demo corridor GEOIDs + anonymization helpers
-│   │   ├── store.py              # read-side queries for the API (map payload, detail, trend)
+│   │   ├── store.py              # read-side queries for the API (map payload, detail, trend,
+│   │   │                         # neighborhood roll-ups + aggregated trend)
 │   │   ├── api.py                # FastAPI app
-│   │   └── cli.py                # `signals ingest|features|train|score|serve`
+│   │   └── cli.py                # `signals ingest|features|train|score|rank|brief|explain|serve`
 │   ├── tests/
 │   └── data/                     # gitignored: raw/*.parquet, signals.duckdb, models/
 ├── frontend/
@@ -80,13 +85,20 @@ Gotchas confirmed against the live endpoints:
 │   └── src/
 │       ├── api.ts                        # typed fetchers + ApiError (surfaces FastAPI `detail`)
 │       ├── heat.ts                       # single-hue sequential ramp for the heat score
+│       ├── views.ts                      # ViewName (kept out of App.tsx so components can import it)
+│       ├── neighborhoods.ts              # pure typeahead matching + client-side ranking
 │       ├── App.tsx                       # map + drawer layout
 │       └── components/
 │           ├── HeatMap.tsx               # react-leaflet choropleth of block groups
 │           ├── BlockDrawer.tsx           # score, top signals, trend, households
 │           ├── Trend.tsx                 # single-series sparklines (small multiples)
 │           ├── HouseholdList.tsx         # ranked rows, reason chips, heirship as "follow-up flag"
-│           └── BriefPanel.tsx            # "Generate brief" → rendered sections
+│           ├── BriefPanel.tsx            # "Generate brief" → rendered sections
+│           ├── NeighborhoodsView.tsx     # neighborhoods page: search + ranked list | detail
+│           ├── NeighborhoodSearch.tsx    # ARIA combobox typeahead over the 186 names
+│           ├── NeighborhoodList.tsx      # ranked rows + sort toggle
+│           ├── NeighborhoodDetail.tsx    # driving signals, trend, member block groups
+│           └── ExplainerPanel.tsx        # "Summarize these metrics" → rendered sections
 ├── md/
 │   ├── signal-details.md         # pitch/spec
 │   ├── architecture.md           # this file
@@ -192,6 +204,24 @@ Each stage reads only the previous stage's tables. Re-running any stage overwrit
 - `get_or_create_brief(...) -> (Brief, cached, summary)`; `force=True` regenerates. `signals brief <geoid…>` is the CLI front for pre-caching.
 - System prompt: explain, never compute; only cite numbers present in the summary; protections limited to the vetted list in `config.PROTECTIONS` (see TODO D.2).
 
+### `store.py`
+Read side for the API: pure functions over a DuckDB connection, no writes.
+- Block level: `scores_stamp`, `block_neighborhoods`, `all_scores`, `blocks_feature_collection`, `block_trend`, `block_detail`, `backtest_footnote` (shared by both detail payloads).
+- Neighborhood level: `neighborhood_slug`, `neighborhood_members`, `slug_index`, `neighborhood_list(con, hot_threshold)`, `neighborhood_trend(con, geoids)`, `neighborhood_detail(con, slug, report, hot_threshold)`.
+- **A neighborhood is not scored** — it is a roll-up of the block groups sharing a name. `neighborhood_list` rows carry `heat_max` (the headline), `heat_mean`, `n_hot`, `n_low_confidence`, `hottest_geoid` and aggregated `top_signals`; ranking is `heat_max DESC, n_hot DESC, heat_mean DESC, name ASC`, a total order.
+- **Slugs** exist because real names carry `/`, `'` and `#` ("Fitzgerald/Marygrove", "Grandmont #1", "Evergreen Lahser 7/8"). The 186 live names produce 186 unique slugs; `slug_index` still resolves a collision to the alphabetically first name so a re-ingest can't 500.
+- **Aggregated trend** is `Trend`-shaped (`{years, series, partial_year}`) and returns exactly `TREND_COLUMNS`, so `Trend.tsx` is reused unchanged. Permit and blight counts are summed from `bg_features`; `median_ppsf`, `median_price`, `llc_share` and `n_sales` are recomputed **exactly** from `sales_clean` over the member block groups, because averaging block-group medians would only ever approximate. Verified: pooling A=[10,20,30] and B=[100] gives a median of 25, not the 60 an average of medians would give. Guards `_table_exists(con, "sales_clean")` so a partially-built database degrades to null medians instead of a 500.
+- `block_neighborhoods`'s majority vote orders by `count(*) DESC, p.neighborhood` — without the tiebreak a block group split evenly between two names could flip between runs and silently move between neighborhoods.
+
+### `explain.py`
+- `build_neighborhood_summary(con, slug, report) -> NeighborhoodSummary | None`, `generate_explainer(summary, settings=None, client=None) -> MetricExplainer`, `get_or_create_explainer(...) -> (MetricExplainer, cached, summary) | None`.
+- Sibling of `brief.py`, deliberately a separate module: the brief is a canvassing document constrained to `config.PROTECTIONS`, this is a plain-language reading of the metrics on the neighborhoods page, and the two prompts pull in opposite directions. The OpenAI client factory is shared as the now-public `brief.openai_client(settings)`.
+- `NeighborhoodSummary` (aggregate only, one grain further from people than `BlockSummary` — no household counts at all, since the page is public): `name`, `slug`, `n_block_groups`, `n_hot`, `heat_max`, `heat_mean`, `n_low_confidence`, `hot_threshold`, `model_mode`, `backtest_summary`, aggregated `top_signals`, and five complete years of `median_ppsf`, `n_sales`, `llc_share`, `permit_count`, `blight_tickets`. No GEOIDs, names, or addresses — asserted by test.
+- `MetricExplainer` schema: a single `summary` field — **one paragraph of ordinary prose** (3–4 sentences, 55–90 words), not a structured document. The page already renders the figures, the aggregated signals and the model footnote, so the paragraph's job is to say what they add up to. The route returns that paragraph as a plain string in `summary`, not a one-key object.
+- Prompt rules earned from real calls, all covered by tests: **counts are exact** (one call said "seven of ten block groups" where the summary said eight); **trend numbers are neighborhood-wide** totals or medians and must never be attributed to a part of it (one call blamed "one corner" for the neighborhood's 1,437 blight tickets); **no tool vocabulary** — no "heat", "hot threshold", "heat mean", "signal", "flagged", and percentages rather than bare decimals (earlier calls narrated "heat mean 72, hot threshold 70" and "investor share was 0.16"); **no model diagnostics** (Spearman, R²) and no first person.
+- Prompt rules that must survive a refactor: the **cross-sectional** rule carried over from `brief.py` (z-scores compare to the city in the same year, not over time; a thin-market price dip is not prices falling); signals are **counts of block groups**, never neighborhood averages, and `mean_z` is never quoted; **no program, protection or service may be named** — that is the brief's job; no model diagnostics (Spearman, R²) and no first person. `_drop_program_mentions` is the post-parse guard, mirroring `brief._enforce_protections`, because a prompt rule alone already proved insufficient once.
+- Cached as JSON under `data/explainers/{slug}.{model_version}.{openai_model}.json`; a cache written under an older output schema is regenerated rather than 502ing (the path doesn't encode the schema). `uv run signals explain <slug…>` pre-generates for offline demos.
+
 ### `api.py`
 | Route | Returns | Gate |
 |---|---|---|
@@ -199,6 +229,9 @@ Each stage reads only the previous stage's tables. Re-running any stage overwrit
 | `GET /api/demo/corridors` | the fly-to presets from `demo.DEMO_CORRIDORS`, each with live `neighborhood`, `heat_score`, `confidence`; `suggested` marks data-driven placeholders the user hasn't confirmed | public |
 | `GET /api/blocks` | GeoJSON FeatureCollection: `bg_geoid`, `neighborhood`, `heat_score`, `confidence`, `top_signals` (with `label`), `model_mode`. Built from the cached `blockgroups.geojson` + `bg_scores`, cached in-process keyed on `scored_at`; 503 until `signals train` has run | public |
 | `GET /api/blocks/{geoid}` | the score row + `neighborhood` (most common parcel neighborhood), `trend` (`years`, per-metric `series`, `partial_year`), `backtest_summary` footnote (backtest numbers, or "weighted index" in fallback mode); 404 for an unknown GEOID | public |
+| `GET /api/neighborhoods` | `{hot_threshold, neighborhoods[]}` — all 186 named neighborhoods rolled up from their block groups, ranked most at risk first; cached in-process on `scored_at`; 503 until `signals train` has run | public |
+| `GET /api/neighborhoods/{slug}` | the roll-up + `trend` (aggregated, `Trend`-shaped) + `block_groups[]` ranked by heat desc + `backtest_summary`; 404 for an unknown slug | public |
+| `POST /api/neighborhoods/{slug}/summary` (+`?force=true`) | `{name, slug, cached, llm_model, summary}` where `summary` is one paragraph of prose; 503 if the key is missing, 502 with the provider's message, 404 for an unknown slug | `X-Org-Token` |
 | `GET /api/blocks/{geoid}/households` | `{hot, hot_threshold, anonymized, heirship_note, households[]}` — computed live via `vulnerability.rank(persist=False)`; `hot=false` with an empty list below the threshold; 404 for an unknown GEOID | `X-Org-Token`; anonymized in demo |
 | `POST /api/blocks/{geoid}/brief` (+`?force=true`) | `{bg_geoid, neighborhood, cached, llm_model, brief}`; 503 if the key is missing, 502 with the provider's message if the call fails, 404 for an unknown GEOID | `X-Org-Token` |
 
@@ -219,6 +252,8 @@ Core path first, matching the spec cut-line. Each milestone is demoable on its o
 7. **Brief** — `brief.py` + `BriefPanel`. *Milestone 3 = full demo.*
 8. **Polish** — corridor fly-to presets from `demo.py` (done: `CorridorBar`), loading states (done: drawer skeleton, offline / not-scored banners), README run steps (done).
 
+9. **Neighborhoods page** — `store.py` roll-ups, three `/api/neighborhoods*` routes, `explain.py`, and the searchable ranked list + trend detail. Post-cut-line polish, not a new core path.
+
 Stretch, only after 7: Census ACS join, land value tax simulator.
 
 ## 8. Verification
@@ -227,4 +262,5 @@ Stretch, only after 7: Census ACS join, land value tax simulator.
 - `uv run signals ingest && uv run signals features && uv run signals train && uv run signals score` completes and prints row counts.
 - `uv run signals serve` + `npm run dev`: click a demo-corridor block group → drawer shows score and 3 signals; households load with the token; brief returns schema-valid JSON in under 15 s.
 - `SIGNALS_DEMO=1`: no names, hundred-block addresses only.
+- Neighborhoods page: the list defaults to Five Points / Nardin Park / Happy Homes (all `heat_max` 100); "Most hot blocks" puts Bethune Community (6 of 9) first; University District, the intended control, sits near the bottom at `heat_max` 17 — note its demo-preset block group is 9, the neighborhood maximum is its sibling. Typeahead: "dexter" matches two, "st marys" two, "ohair" matches O'Hair Park, "7/8" two. A member block group's "View on map" opens the map with that polygon selected.
 - Drawer footer shows either "model v1 · backtest ρ = …" or "weighted index (fallback)".

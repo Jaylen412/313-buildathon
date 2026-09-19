@@ -18,7 +18,7 @@ import duckdb
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from signals import brief, demo, store, vulnerability
+from signals import brief, demo, explain, store, vulnerability
 from signals.config import get_settings
 from signals.forecast import REPORT_FILENAME
 
@@ -46,6 +46,12 @@ def load_report() -> dict | None:
 
 _blocks_cache: dict = {"stamp": None, "payload": None}
 _blocks_lock = Lock()
+
+# The neighborhood list rolls up every block group *and* majority-votes a name
+# over the whole parcel table, so it is cached the same way the map payload is:
+# keyed on the scores' stamp, rebuilt once per `signals train`.
+_neighborhoods_cache: dict = {"stamp": None, "payload": None}
+_neighborhoods_lock = Lock()
 
 
 def require_org_token(x_org_token: str | None) -> None:
@@ -137,6 +143,87 @@ def get_block(geoid: str) -> dict:
     if detail is None:
         raise HTTPException(status_code=404, detail=f"unknown block group {geoid}")
     return detail
+
+
+@app.get("/api/neighborhoods")
+def list_neighborhoods() -> dict:
+    """Public: every named neighborhood rolled up from its block groups,
+    ordered most at risk first. A neighborhood is the set of block groups
+    sharing a parcel-file neighborhood name (186 names, 625 block groups);
+    the roll-up is deterministic SQL, not a second model."""
+    con = get_con()
+    try:
+        stamp = store.scores_stamp(con)
+        if stamp is None:
+            raise HTTPException(status_code=503, detail="not scored yet: run `uv run signals train`")
+        with _neighborhoods_lock:
+            if _neighborhoods_cache["stamp"] != stamp:
+                payload = {
+                    "hot_threshold": vulnerability.DEFAULT_HOT_THRESHOLD,
+                    "neighborhoods": store.neighborhood_list(
+                        con, vulnerability.DEFAULT_HOT_THRESHOLD
+                    ),
+                }
+                _neighborhoods_cache.update(stamp=stamp, payload=payload)
+            return _neighborhoods_cache["payload"]
+    finally:
+        con.close()
+
+
+@app.get("/api/neighborhoods/{slug}")
+def get_neighborhood(slug: str) -> dict:
+    """Public: one neighborhood's roll-up, its aggregated per-year trend, and
+    its member block groups ranked most at risk first."""
+    con = get_con()
+    try:
+        try:
+            detail = store.neighborhood_detail(
+                con, slug, load_report(), vulnerability.DEFAULT_HOT_THRESHOLD
+            )
+        except store.NotScoredError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+    finally:
+        con.close()
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"unknown neighborhood {slug}")
+    return detail
+
+
+@app.post("/api/neighborhoods/{slug}/summary")
+def post_neighborhood_summary(
+    slug: str, force: bool = False, x_org_token: str | None = Header(default=None)
+) -> dict:
+    """Gated: generate (or return the cached) plain-language explanation of a
+    neighborhood's metrics — one paragraph in `summary`. The LLM only ever sees
+    the aggregate NeighborhoodSummary, and is forbidden from naming assistance
+    programs — that is the outreach brief's job. `?force=true` regenerates."""
+    require_org_token(x_org_token)
+    settings = get_settings()
+    con = get_con()
+    try:
+        if not store.scores_stamp(con):
+            raise HTTPException(status_code=503, detail="not scored yet: run `uv run signals train`")
+        try:
+            result = explain.get_or_create_explainer(
+                con, slug, load_report(), settings, force=force,
+                hot_threshold=vulnerability.DEFAULT_HOT_THRESHOLD,
+            )
+        except RuntimeError as exc:  # missing key, unparsable model output
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:  # OpenAI errors: surface the message, don't 500
+            raise HTTPException(status_code=502, detail=f"summary generation failed: {exc}") from exc
+    finally:
+        con.close()
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"unknown neighborhood {slug}")
+    generated, cached, summary = result
+    return {
+        "name": summary.name,
+        "slug": slug,
+        "cached": cached,
+        "llm_model": settings.openai_model,
+        "summary": generated.summary,
+    }
 
 
 @app.get("/api/blocks/{geoid}/households")

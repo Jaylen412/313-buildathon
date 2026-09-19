@@ -54,6 +54,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "get_con", _con)
     monkeypatch.setattr(api, "load_report", lambda: {"holdout_year": 2023, "backtest": {"spearman": 0.386, "r2": 0.105}})
     api._blocks_cache.update(stamp=None, payload=None)
+    api._neighborhoods_cache.update(stamp=None, payload=None)
     return TestClient(api.app)
 
 
@@ -207,3 +208,16 @@ def test_demo_corridors_are_enriched_with_live_scores(client, monkeypatch):
     assert body[0]["neighborhood"] == "Corktown" and body[0]["heat_score"] == 95 and body[0]["suggested"] is True
     assert body[1]["heat_score"] is None  # unknown geoid degrades, doesn't crash
     assert "households" not in json.dumps(body)
+
+
+def test_neighborhoods_route_works_without_a_sales_clean_table(client):
+    """This fixture DB has no sales_clean, which is the shape a partially-built
+    database has. The neighborhood trend must degrade to null medians rather
+    than 500."""
+    body = client.get("/api/neighborhoods").json()
+    assert [n["name"] for n in body["neighborhoods"]] == ["Corktown"]
+    detail = client.get("/api/neighborhoods/corktown").json()
+    assert detail["n_block_groups"] == 1
+    assert detail["trend"]["years"], "years still come from bg_features"
+    assert all(v is None for v in detail["trend"]["series"]["median_ppsf"])
+    assert detail["trend"]["series"]["permit_count"][0] == 3
