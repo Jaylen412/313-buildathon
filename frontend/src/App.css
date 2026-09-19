@@ -26,11 +26,16 @@
 .sidebar-group { display: flex; flex-direction: column; gap: 0.25rem; }
 .sidebar-bottom { margin-top: auto; padding-top: 0.75rem; border-top: 1px solid var(--hairline); }
 .sidebar-btn {
-  display: block; width: 100%; text-align: left; padding: 0.45rem 0.6rem; border-radius: 6px;
+  display: flex; align-items: center; gap: 0.5rem; width: 100%; text-align: left; padding: 0.45rem 0.6rem; border-radius: 6px;
   border: 1px solid transparent; background: transparent; color: var(--ink-2); cursor: pointer; font-size: 0.9rem;
 }
 .sidebar-btn:hover { background: rgba(255, 255, 255, 0.04); color: var(--ink); }
 .sidebar-btn.active { background: var(--ink); color: var(--plane); }
+.sidebar-icon {
+  font-size: 20px; flex-shrink: 0;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+}
+.sidebar-btn.active .sidebar-icon { font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 20; }
 
 .app-content { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
