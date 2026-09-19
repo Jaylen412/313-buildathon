@@ -87,7 +87,7 @@ export function HeatMap({ blocks, selectedGeoid, onSelect }: HeatMapProps) {
   const data = useMemo(() => blocks, [blocks]);
 
   return (
-    <MapContainer center={DETROIT_CENTER} zoom={11} style={{ height: "100%", width: "100%" }} preferCanvas>
+    <MapContainer center={DETROIT_CENTER} zoom={11.5} style={{ height: "100%", width: "100%" }} preferCanvas>
       {/* Esri's dark-gray canvas: keyless, same service tier as the light-gray
           base this replaced. CARTO's basemaps now watermark "API KEY REQUIRED"
           without a key. */}
