@@ -5,7 +5,7 @@
  * yet and is shown as such, not as an error.
  */
 import { useQuery } from "@tanstack/react-query";
-import { ApiError, fetchBlockDetail, fetchHouseholds, type TopSignal } from "../api";
+import { fetchBlockDetail, type TopSignal } from "../api";
 import { heatColor, inkOn } from "../heat";
 import { HouseholdList } from "./HouseholdList";
 import { BriefPanel } from "./BriefPanel";
@@ -22,22 +22,8 @@ function describe(s: TopSignal): string {
   return `${s.label} — ${magnitude} ${dir} the city that year`;
 }
 
-function statusMessage(err: unknown): { text: string; pending: boolean } {
-  if (err instanceof ApiError) {
-    if (err.status === 501) return { text: err.message, pending: true };
-    if (err.status === 403) return { text: "Household data is gated to organization accounts.", pending: false };
-    return { text: err.message, pending: false };
-  }
-  return { text: String(err), pending: false };
-}
-
 export function BlockDrawer({ geoid, onClose }: BlockDrawerProps) {
   const detail = useQuery({ queryKey: ["block", geoid], queryFn: () => fetchBlockDetail(geoid) });
-  const households = useQuery({
-    queryKey: ["households", geoid],
-    queryFn: () => fetchHouseholds(geoid),
-    retry: false,
-  });
 
   return (
     <aside className="block-drawer" aria-label="Block group details">
@@ -85,19 +71,11 @@ export function BlockDrawer({ geoid, onClose }: BlockDrawerProps) {
               </li>
             ))}
           </ul>
-
-          <p className="model-footnote">{detail.data.backtest_summary}</p>
         </>
       )}
 
       <h3>Households to reach first</h3>
-      {households.isLoading && <p className="muted">Ranking owner-occupied households…</p>}
-      {households.isError && (
-        <p className={statusMessage(households.error).pending ? "muted" : "error"}>
-          {statusMessage(households.error).text}
-        </p>
-      )}
-      {households.data && <HouseholdList data={households.data} />}
+      <HouseholdList geoid={geoid} />
 
       <BriefPanel geoid={geoid} />
 

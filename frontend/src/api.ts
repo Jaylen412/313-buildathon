@@ -80,6 +80,10 @@ export interface HouseholdsResponse {
   anonymized: boolean;
   heirship_note: string;
   households: Household[];
+  total: number;
+  offset: number;
+  limit: number;
+  has_more: boolean;
 }
 
 export interface Protection {
@@ -154,8 +158,12 @@ export const fetchBlocks = () => apiFetch<BlocksResponse>("/api/blocks");
 
 export const fetchBlockDetail = (geoid: string) => apiFetch<BlockDetail>(`/api/blocks/${geoid}`);
 
-export const fetchHouseholds = (geoid: string) =>
-  apiFetch<HouseholdsResponse>(`/api/blocks/${geoid}/households`, { headers: orgHeaders() });
+export const HOUSEHOLDS_PAGE_SIZE = 25;
+
+export const fetchHouseholds = (geoid: string, offset = 0, limit = HOUSEHOLDS_PAGE_SIZE) =>
+  apiFetch<HouseholdsResponse>(`/api/blocks/${geoid}/households?limit=${limit}&offset=${offset}`, {
+    headers: orgHeaders(),
+  });
 
 export interface BriefResponse {
   bg_geoid: string;

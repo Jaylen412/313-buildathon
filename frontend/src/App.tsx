@@ -5,7 +5,6 @@ import { useState } from "react";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { HeatMap, Legend } from "./components/HeatMap";
 import { BlockDrawer } from "./components/BlockDrawer";
-import { CorridorBar } from "./components/CorridorBar";
 import { ApiError, fetchBlocks, fetchHealth } from "./api";
 import "./App.css";
 
@@ -46,7 +45,6 @@ function Shell() {
           <code>backend/</code> (see README).
         </div>
       )}
-      <CorridorBar selectedGeoid={selectedGeoid} onSelect={setSelectedGeoid} />
       <main className="app-main">
         <div className="map-pane">
           {blocks.isLoading && <p className="map-status">Loading block groups…</p>}
