@@ -115,7 +115,7 @@ export function NeighborhoodDetail({ slug, onOpenBlock }: NeighborhoodDetailProp
       </p>
       <Trend trend={data.trend} />
 
-      <h3>Block groups, most at risk first</h3>
+      <h3>Block Groups:</h3>
       <ol className="nb-members">
         {data.block_groups.map((member) => (
           <li key={member.bg_geoid}>
