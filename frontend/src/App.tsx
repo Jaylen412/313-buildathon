@@ -26,20 +26,20 @@ function Shell() {
 
   return (
     <div className="app-shell">
+      <header className="app-header">
+        <div>
+          <h1>Signals</h1>
+          <p>Detroit anti-displacement early warning</p>
+        </div>
+        {blocks.data && (
+          <p className="muted">
+            {scored} block groups scored | {mode === "fallback" ? "weighted index" : "forecast model"}
+          </p>
+        )}
+      </header>
       <div className="app-body">
         <Sidebar active={activeView} onChange={setActiveView} />
         <div className="app-content">
-          <header className="app-header">
-            <div>
-              <h1>Signals</h1>
-              <p>Detroit anti-displacement early warning</p>
-            </div>
-            {blocks.data && (
-              <p className="muted">
-                {scored} block groups scored | {mode === "fallback" ? "weighted index" : "forecast model"}
-              </p>
-            )}
-          </header>
           {offline && (
             <div className="banner error">
               API is not reachable at {import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000"}. Start it with{" "}
